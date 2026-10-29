@@ -7,6 +7,7 @@ import {
   useLocation,
 } from 'react-router-dom'
 
+import AcceptInvitation from './pages/AcceptInvitation'
 import { supabase } from './lib/supabase'
 import Sidebar from './components/Sidebar'
 import Header from './components/Header'
@@ -194,6 +195,10 @@ function AppRoutes() {
       />
 
       <Route path="*" element={<Navigate to="/" replace />} />
+      <Route
+  path="/aceitar-convite"
+  element={<AcceptInvitation />}
+/>
     </Routes>
   )
 }
