@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react'
 import {
   BrowserRouter,
@@ -7,8 +8,8 @@ import {
   useLocation,
 } from 'react-router-dom'
 
-import AcceptInvitation from './pages/AcceptInvitation'
 import { supabase } from './lib/supabase'
+import AcceptInvitation from './pages/AcceptInvitation'
 import Sidebar from './components/Sidebar'
 import Header from './components/Header'
 import Dashboard from './pages/Dashboard'
@@ -29,16 +30,9 @@ function AppRoutes() {
   useEffect(() => {
     let active = true
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, currentSession) => {
-      if (active) {
-        setSession(currentSession)
-        setAuthLoading(false)
-      }
-    })
+    async function loadSession() {
+      const { data, error } = await supabase.auth.getSession()
 
-    supabase.auth.getSession().then(({ data, error }) => {
       if (!active) return
 
       if (error) {
@@ -47,6 +41,17 @@ function AppRoutes() {
       }
 
       setSession(data.session)
+      setAuthLoading(false)
+    }
+
+    loadSession()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+      if (!active) return
+
+      setSession(currentSession)
       setAuthLoading(false)
     })
 
@@ -105,20 +110,34 @@ function AppRoutes() {
     )
   }
 
+  // O convite precisa ser acessível antes de o usuário pertencer à empresa.
+  if (location.pathname === '/aceitar-convite') {
+    return <AcceptInvitation />
+  }
+
   const isAuthPage =
     location.pathname === '/login' ||
     location.pathname === '/cadastro'
 
+  // Sem sessão, só permite login, cadastro e aceite de convite.
   if (!session) {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/cadastro" element={<Register />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route
+          path="/aceitar-convite"
+          element={<AcceptInvitation />}
+        />
+        <Route
+          path="*"
+          element={<Navigate to="/login" replace />}
+        />
       </Routes>
     )
   }
 
+  // Usuário autenticado não precisa voltar ao login.
   if (isAuthPage) {
     return <Navigate to="/" replace />
   }
@@ -194,11 +213,10 @@ function AppRoutes() {
         element={<Navigate to="/" replace />}
       />
 
-      <Route path="*" element={<Navigate to="/" replace />} />
       <Route
-  path="/aceitar-convite"
-  element={<AcceptInvitation />}
-/>
+        path="*"
+        element={<Navigate to="/" replace />}
+      />
     </Routes>
   )
 }

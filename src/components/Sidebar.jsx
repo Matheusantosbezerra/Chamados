@@ -7,13 +7,15 @@ import {
   Settings,
   Headset,
 } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
 
 const menuItems = [
-  { label: 'Dashboard', icon: LayoutDashboard, active: true },
-  { label: 'Chamados', icon: Ticket },
-  { label: 'Clientes', icon: Users },
-  { label: 'Relatórios', icon: BarChart3 },
-  { label: 'Configurações', icon: Settings },
+  { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
+  { label: 'Chamados', icon: Ticket, path: '/chamados' },
+  { label: 'Clientes', icon: Users, path: '/clientes' },
+  { label: 'Equipe', icon: Users, path: '/equipe' },
+  { label: 'Relatórios', icon: BarChart3, path: '/relatorios' },
+  { label: 'Configurações', icon: Settings, path: '/configuracoes' },
 ]
 
 export default function Sidebar() {
@@ -39,19 +41,22 @@ export default function Sidebar() {
           Menu principal
         </p>
 
-        {menuItems.map(({ label, icon: Icon, active }) => (
-          <button
+        {menuItems.map(({ label, icon: Icon, path }) => (
+          <NavLink
             key={label}
-            type="button"
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition ${
-              active
-                ? 'bg-blue-50 text-blue-700'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
+            to={path}
+            end={path === '/'}
+            className={({ isActive }) =>
+              `flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition ${
+                isActive
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`
+            }
           >
             <Icon size={19} />
             {label}
-          </button>
+          </NavLink>
         ))}
       </nav>
 
