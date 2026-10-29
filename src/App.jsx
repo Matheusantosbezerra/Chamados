@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react'
 import {
   BrowserRouter,
@@ -15,6 +14,7 @@ import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import CreateOrganization from './pages/CreateOrganization'
+import Team from './pages/Team'
 
 function AppRoutes() {
   const location = useLocation()
@@ -25,7 +25,6 @@ function AppRoutes() {
   const [membershipLoading, setMembershipLoading] = useState(true)
   const [membershipError, setMembershipError] = useState('')
 
-  // Verifica a sessão e acompanha login e logout.
   useEffect(() => {
     let active = true
 
@@ -56,7 +55,6 @@ function AppRoutes() {
     }
   }, [])
 
-  // Verifica se o usuário pertence a uma empresa.
   useEffect(() => {
     let active = true
 
@@ -111,17 +109,13 @@ function AppRoutes() {
     location.pathname === '/cadastro'
 
   if (!session) {
-    if (isAuthPage) {
-      return (
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/cadastro" element={<Register />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      )
-    }
-
-    return <Navigate to="/login" replace />
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/cadastro" element={<Register />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    )
   }
 
   if (isAuthPage) {
@@ -168,10 +162,26 @@ function AppRoutes() {
               <div className="hidden lg:block">
                 <Sidebar />
               </div>
-
               <main className="min-w-0 flex-1">
                 <Header />
                 <Dashboard />
+              </main>
+            </div>
+          </div>
+        }
+      />
+
+      <Route
+        path="/equipe"
+        element={
+          <div className="min-h-screen bg-slate-50">
+            <div className="flex min-h-screen">
+              <div className="hidden lg:block">
+                <Sidebar />
+              </div>
+              <main className="min-w-0 flex-1">
+                <Header />
+                <Team />
               </main>
             </div>
           </div>
