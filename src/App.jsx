@@ -192,10 +192,6 @@ function PortalPlaceholder() {
 function AppRoutes() {
   const location = useLocation()
 
-  if (location.pathname === '/redefinir-senha') {
-  return <ResetPassword />
-}
-
   const [session, setSession] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
 
@@ -232,6 +228,11 @@ function AppRoutes() {
 
       setSession(currentSession)
       setAuthLoading(false)
+
+      if (event === 'PASSWORD_RECOVERY') {
+        // O usuário permanece na página de redefinição.
+        // Não redirecionar para o painel.
+      }
     })
 
     return () => {
@@ -295,6 +296,13 @@ function AppRoutes() {
       active = false
     }
   }, [session, authLoading, location.pathname])
+
+  // IMPORTANTE:
+  // A redefinição tem prioridade sobre qualquer verificação de acesso.
+  // Todos os Hooks já foram declarados acima.
+  if (location.pathname === '/redefinir-senha') {
+    return <ResetPassword />
+  }
 
   // Carregamento inicial
   if (authLoading) {
@@ -472,17 +480,17 @@ function AppRoutes() {
       />
 
       <Route
-  path="/chamados/:id"
-  element={
-    hasStaffAccess ? (
-      <StaffLayout>
-        <TicketDetails />
-      </StaffLayout>
-    ) : (
-      <Navigate to="/portal" replace />
-    )
-  }
-/>
+        path="/chamados/:id"
+        element={
+          hasStaffAccess ? (
+            <StaffLayout>
+              <TicketDetails />
+            </StaffLayout>
+          ) : (
+            <Navigate to="/portal" replace />
+          )
+        }
+      />
 
       <Route
         path="/clientes"

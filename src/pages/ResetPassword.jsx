@@ -1,7 +1,11 @@
 
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Headset, LockKeyhole, CheckCircle2 } from 'lucide-react'
+import {
+  Headset,
+  LockKeyhole,
+  CheckCircle2,
+} from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 export default function ResetPassword() {
@@ -17,32 +21,61 @@ export default function ResetPassword() {
 
   useEffect(() => {
     let active = true
-
-    async function checkSession() {
-      const { data, error } = await supabase.auth.getSession()
-
-      if (!active) return
-
-      setValidSession(!error && !!data.session)
-      setLoading(false)
-    }
-
-    checkSession()
+    let recoveryDetected = false
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return
 
-      if (
-        event === 'PASSWORD_RECOVERY' ||
-        event === 'SIGNED_IN' ||
-        event === 'TOKEN_REFRESHED'
-      ) {
+      if (event === 'PASSWORD_RECOVERY') {
+        recoveryDetected = true
         setValidSession(!!session)
         setLoading(false)
+        return
+      }
+
+      if (event === 'SIGNED_IN' && session) {
+        setValidSession(true)
+        setLoading(false)
+      }
+
+      if (event === 'SIGNED_OUT') {
+        setValidSession(false)
       }
     })
+
+    async function checkSession() {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession()
+
+      if (!active) return
+
+      if (sessionError) {
+        setValidSession(false)
+        setLoading(false)
+        return
+      }
+
+      if (session) {
+        setValidSession(true)
+        setLoading(false)
+        return
+      }
+
+      // Aguarda o evento de recuperação caso o Supabase
+      // ainda esteja processando o token da URL.
+      window.setTimeout(() => {
+        if (!active || recoveryDetected) return
+
+        setValidSession(false)
+        setLoading(false)
+      }, 1500)
+    }
+
+    checkSession()
 
     return () => {
       active = false
@@ -72,7 +105,9 @@ export default function ResetPassword() {
       })
 
       if (updateError) {
-        setError('Não foi possível definir sua senha. Solicite um novo link.')
+        setError(
+          'Não foi possível definir sua senha. Solicite um novo link de recuperação.'
+        )
         return
       }
 
@@ -93,8 +128,10 @@ export default function ResetPassword() {
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-100">
-        <p className="text-slate-500">Verificando seu acesso...</p>
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+        <p className="text-slate-500">
+          Validando seu link de recuperação...
+        </p>
       </main>
     )
   }
@@ -113,7 +150,7 @@ export default function ResetPassword() {
           </h1>
 
           <p className="mt-2 text-sm text-slate-500">
-            Defina sua senha para acessar o portal.
+            Defina sua senha para acessar sua conta.
           </p>
         </div>
 
@@ -152,7 +189,7 @@ export default function ResetPassword() {
               </h2>
 
               <p className="mt-2 text-sm text-slate-500">
-                Não foi possível validar seu link de acesso. Solicite um novo e-mail à empresa que gerencia seus chamados.
+                Não foi possível validar seu link. Solicite um novo e-mail de recuperação.
               </p>
             </div>
 
