@@ -13,6 +13,7 @@ import { Building2 } from 'lucide-react'
 
 import { supabase } from './lib/supabase'
 
+import ResetPassword from './pages/ResetPassword'
 import TicketDetails from './pages/TicketDetails'
 import Customers from './pages/Customers'
 import Tickets from './pages/Tickets'
@@ -190,6 +191,10 @@ function PortalPlaceholder() {
 
 function AppRoutes() {
   const location = useLocation()
+
+  if (location.pathname === '/redefinir-senha') {
+  return <ResetPassword />
+}
 
   const [session, setSession] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
