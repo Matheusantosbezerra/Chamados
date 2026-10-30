@@ -205,7 +205,7 @@ export default function Register() {
             to="/login"
             className="font-semibold text-blue-600 hover:text-blue-700"
           >
-            Entrar
+          Entrar
           </Link>
         </p>
       </form>

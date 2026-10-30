@@ -13,6 +13,7 @@ import { Building2 } from 'lucide-react'
 
 import { supabase } from './lib/supabase'
 
+import TicketDetails from './pages/TicketDetails'
 import Customers from './pages/Customers'
 import Tickets from './pages/Tickets'
 import AcceptInvitation from './pages/AcceptInvitation'
@@ -464,6 +465,19 @@ function AppRoutes() {
             : <Navigate to="/portal" replace />
         }
       />
+
+      <Route
+  path="/chamados/:id"
+  element={
+    hasStaffAccess ? (
+      <StaffLayout>
+        <TicketDetails />
+      </StaffLayout>
+    ) : (
+      <Navigate to="/portal" replace />
+    )
+  }
+/>
 
       <Route
         path="/clientes"

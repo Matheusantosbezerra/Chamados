@@ -1,5 +1,6 @@
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Search, Ticket, RefreshCw } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -8,18 +9,27 @@ function formatStatus(status) {
 
   return status
     .replaceAll('_', ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .replace(/\b\w/g, letter => letter.toUpperCase())
 }
 
 function statusColor(status) {
   const value = String(status || '').toLowerCase()
 
-  if (value.includes('fechado') || value.includes('resolvido') || value.includes('closed')) {
+  if (
+    value.includes('fechado') ||
+    value.includes('resolvido') ||
+    value.includes('closed') ||
+    value.includes('resolved')
+  ) {
     return 'bg-green-100 text-green-700'
   }
 
   if (value.includes('andamento') || value.includes('progress')) {
     return 'bg-blue-100 text-blue-700'
+  }
+
+  if (value.includes('aguardando') || value.includes('waiting')) {
+    return 'bg-purple-100 text-purple-700'
   }
 
   if (value.includes('aberto') || value.includes('open')) {
@@ -32,7 +42,11 @@ function statusColor(status) {
 function priorityColor(priority) {
   const value = String(priority || '').toLowerCase()
 
-  if (value.includes('alta') || value.includes('high') || value.includes('urgente')) {
+  if (
+    value.includes('alta') ||
+    value.includes('high') ||
+    value.includes('urgente')
+  ) {
     return 'text-red-600'
   }
 
@@ -50,15 +64,21 @@ function formatDate(date) {
 }
 
 export default function Tickets() {
+  const navigate = useNavigate()
+
   const [tickets, setTickets] = useState([])
   const [customers, setCustomers] = useState({})
+  const [attendants, setAttendants] = useState({})
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('TODOS')
   const [priorityFilter, setPriorityFilter] = useState('TODAS')
+  const [attendantFilter, setAttendantFilter] = useState('TODOS')
 
-  async function loadTickets() {
+  const loadTickets = useCallback(async () => {
     setLoading(true)
     setError('')
 
@@ -92,6 +112,7 @@ export default function Tickets() {
           status,
           priority,
           customer_id,
+          assigned_to,
           created_at,
           updated_at
         `)
@@ -101,12 +122,14 @@ export default function Tickets() {
       if (ticketsError) throw ticketsError
 
       const ticketList = data || []
+
       setTickets(ticketList)
 
+      // Buscar nomes dos clientes
       const customerIds = [
         ...new Set(
           ticketList
-            .map((ticket) => ticket.customer_id)
+            .map(ticket => ticket.customer_id)
             .filter(Boolean)
         ),
       ]
@@ -130,62 +153,149 @@ export default function Tickets() {
       } else {
         setCustomers({})
       }
+
+      // Buscar nomes dos atendentes responsáveis
+      const attendantIds = [
+        ...new Set(
+          ticketList
+            .map(ticket => ticket.assigned_to)
+            .filter(Boolean)
+        ),
+      ]
+
+      if (attendantIds.length > 0) {
+        const { data: profilesData, error: profilesError } =
+          await supabase
+            .from('profiles')
+            .select('id, full_name')
+            .in('id', attendantIds)
+
+        if (profilesError) throw profilesError
+
+        const attendantMap = {}
+
+        for (const profile of profilesData || []) {
+          attendantMap[profile.id] = profile.full_name || 'Atendente'
+        }
+
+        setAttendants(attendantMap)
+      } else {
+        setAttendants({})
+      }
+
     } catch (err) {
       console.error('Erro ao carregar chamados:', err)
       setError(err.message || 'Não foi possível carregar os chamados.')
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadTickets()
-  }, [])
+  }, [loadTickets])
 
   const statuses = useMemo(
-    () => [...new Set(tickets.map((ticket) => ticket.status).filter(Boolean))],
+    () => [
+      ...new Set(
+        tickets.map(ticket => ticket.status).filter(Boolean)
+      ),
+    ],
     [tickets]
   )
 
   const priorities = useMemo(
-    () => [...new Set(tickets.map((ticket) => ticket.priority).filter(Boolean))],
+    () => [
+      ...new Set(
+        tickets.map(ticket => ticket.priority).filter(Boolean)
+      ),
+    ],
     [tickets]
   )
 
   const filteredTickets = useMemo(() => {
-    return tickets.filter((ticket) => {
+    return tickets.filter(ticket => {
       const searchValue = search.toLowerCase()
 
       const matchesSearch =
         String(ticket.number || '').toLowerCase().includes(searchValue) ||
         String(ticket.subject || '').toLowerCase().includes(searchValue) ||
-        String(customers[ticket.customer_id] || '').toLowerCase().includes(searchValue)
+        String(customers[ticket.customer_id] || '')
+          .toLowerCase()
+          .includes(searchValue) ||
+        String(attendants[ticket.assigned_to] || '')
+          .toLowerCase()
+          .includes(searchValue)
 
       const matchesStatus =
-        statusFilter === 'TODOS' || ticket.status === statusFilter
+        statusFilter === 'TODOS' ||
+        ticket.status === statusFilter
 
       const matchesPriority =
-        priorityFilter === 'TODAS' || ticket.priority === priorityFilter
+        priorityFilter === 'TODAS' ||
+        ticket.priority === priorityFilter
 
-      return matchesSearch && matchesStatus && matchesPriority
+      const matchesAttendant =
+        attendantFilter === 'TODOS' ||
+        (attendantFilter === 'SEM_ATENDENTE'
+          ? !ticket.assigned_to
+          : ticket.assigned_to === attendantFilter)
+
+      return (
+        matchesSearch &&
+        matchesStatus &&
+        matchesPriority &&
+        matchesAttendant
+      )
     })
-  }, [tickets, customers, search, statusFilter, priorityFilter])
+  }, [
+    tickets,
+    customers,
+    attendants,
+    search,
+    statusFilter,
+    priorityFilter,
+    attendantFilter,
+  ])
 
-  const openTickets = tickets.filter((ticket) => {
-    const status = String(ticket.status || '').toLowerCase()
-    return !status.includes('fechado') &&
-      !status.includes('resolvido') &&
-      !status.includes('closed') &&
-      !status.includes('resolved')
+  const openTickets = tickets.filter(ticket => {
+    return !['RESOLVED', 'CLOSED'].includes(ticket.status)
   }).length
 
   const closedTickets = tickets.length - openTickets
 
+  const assignedTickets = tickets.filter(
+    ticket => ticket.assigned_to
+  ).length
+
+  const unassignedTickets = tickets.length - assignedTickets
+
+  const attendantOptions = useMemo(() => {
+    const options = []
+
+    for (const [id, name] of Object.entries(attendants)) {
+      options.push({ id, name })
+    }
+
+    return options.sort((a, b) =>
+      a.name.localeCompare(b.name, 'pt-BR')
+    )
+  }, [attendants])
+
+  function openTicket(ticketId) {
+    navigate(`/chamados/${ticketId}`)
+  }
+
   return (
     <div className="p-6 lg:p-8">
+
+      {/* Cabeçalho */}
       <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Chamados</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Chamados
+          </h1>
+
           <p className="mt-1 text-sm text-slate-500">
             Gerencie e acompanhe os atendimentos da sua empresa.
           </p>
@@ -196,57 +306,89 @@ export default function Tickets() {
           disabled={loading}
           className="flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
         >
-          <RefreshCw size={17} />
+          <RefreshCw
+            size={17}
+            className={loading ? 'animate-spin' : ''}
+          />
           Atualizar
         </button>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {/* Indicadores */}
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+
         <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <p className="text-sm text-slate-500">Total de chamados</p>
+          <p className="text-sm text-slate-500">
+            Total de chamados
+          </p>
+
           <p className="mt-2 text-3xl font-bold text-slate-900">
             {tickets.length}
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <p className="text-sm text-slate-500">Em aberto</p>
+          <p className="text-sm text-slate-500">
+            Em aberto
+          </p>
+
           <p className="mt-2 text-3xl font-bold text-amber-600">
             {openTickets}
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <p className="text-sm text-slate-500">Finalizados</p>
+          <p className="text-sm text-slate-500">
+            Sem atendente
+          </p>
+
+          <p className="mt-2 text-3xl font-bold text-orange-600">
+            {unassignedTickets}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <p className="text-sm text-slate-500">
+            Finalizados
+          </p>
+
           <p className="mt-2 text-3xl font-bold text-green-600">
             {closedTickets}
           </p>
         </div>
+
       </div>
 
+      {/* Listagem */}
       <div className="rounded-xl border border-slate-200 bg-white">
-        <div className="flex flex-col gap-4 border-b border-slate-100 p-5 lg:flex-row lg:items-center">
-          <div className="relative flex-1">
+
+        {/* Filtros */}
+        <div className="flex flex-col gap-4 border-b border-slate-100 p-5">
+
+          <div className="relative">
             <Search
               size={18}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
             />
+
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Pesquisar por número, assunto ou cliente..."
+              onChange={event => setSearch(event.target.value)}
+              placeholder="Pesquisar por número, assunto, cliente ou atendente..."
               className="w-full rounded-lg border border-slate-200 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+
             <select
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
+              onChange={event => setStatusFilter(event.target.value)}
               className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none"
             >
               <option value="TODOS">Todos os status</option>
-              {statuses.map((status) => (
+
+              {statuses.map(status => (
                 <option key={status} value={status}>
                   {formatStatus(status)}
                 </option>
@@ -255,31 +397,51 @@ export default function Tickets() {
 
             <select
               value={priorityFilter}
-              onChange={(event) => setPriorityFilter(event.target.value)}
+              onChange={event => setPriorityFilter(event.target.value)}
               className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none"
             >
               <option value="TODAS">Todas as prioridades</option>
-              {priorities.map((priority) => (
+
+              {priorities.map(priority => (
                 <option key={priority} value={priority}>
                   {formatStatus(priority)}
                 </option>
               ))}
             </select>
+
+            <select
+              value={attendantFilter}
+              onChange={event => setAttendantFilter(event.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none"
+            >
+              <option value="TODOS">Todos os atendentes</option>
+              <option value="SEM_ATENDENTE">Sem atendente</option>
+
+              {attendantOptions.map(attendant => (
+                <option key={attendant.id} value={attendant.id}>
+                  {attendant.name}
+                </option>
+              ))}
+            </select>
+
           </div>
         </div>
 
+        {/* Erro */}
         {error && (
           <div className="m-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
           </div>
         )}
 
+        {/* Conteúdo */}
         {loading ? (
           <div className="p-12 text-center text-sm text-slate-500">
             Carregando chamados...
           </div>
         ) : filteredTickets.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center">
+
             <div className="mb-4 rounded-full bg-slate-100 p-4">
               <Ticket size={28} className="text-slate-400" />
             </div>
@@ -295,28 +457,64 @@ export default function Tickets() {
                 ? 'Os chamados da sua empresa aparecerão aqui.'
                 : 'Tente alterar os filtros ou a pesquisa.'}
             </p>
+
           </div>
         ) : (
+
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[750px] text-left">
+
+            <table className="w-full min-w-[1000px] text-left">
+
               <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                 <tr>
-                  <th className="px-5 py-4 font-semibold">Chamado</th>
-                  <th className="px-5 py-4 font-semibold">Cliente</th>
-                  <th className="px-5 py-4 font-semibold">Prioridade</th>
-                  <th className="px-5 py-4 font-semibold">Status</th>
-                  <th className="px-5 py-4 font-semibold">Abertura</th>
+                  <th className="px-5 py-4 font-semibold">
+                    Protocolo / Assunto
+                  </th>
+
+                  <th className="px-5 py-4 font-semibold">
+                    Cliente
+                  </th>
+
+                  <th className="px-5 py-4 font-semibold">
+                    Prioridade
+                  </th>
+
+                  <th className="px-5 py-4 font-semibold">
+                    Status
+                  </th>
+
+                  <th className="px-5 py-4 font-semibold">
+                    Atendente
+                  </th>
+
+                  <th className="px-5 py-4 font-semibold">
+                    Abertura
+                  </th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-100">
-                {filteredTickets.map((ticket) => (
-                  <tr key={ticket.id} className="hover:bg-slate-50">
+
+                {filteredTickets.map(ticket => (
+
+                  <tr
+                    key={ticket.id}
+                    onClick={() => openTicket(ticket.id)}
+                    tabIndex={0}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter') {
+                        openTicket(ticket.id)
+                      }
+                    }}
+                    className="cursor-pointer transition hover:bg-blue-50 focus:bg-blue-50 focus:outline-none"
+                  >
+
                     <td className="px-5 py-4">
-                      <p className="text-sm font-semibold text-slate-800">
+                      <p className="text-sm font-semibold text-blue-700">
                         #{ticket.number}
                       </p>
-                      <p className="mt-1 text-sm text-slate-500">
+
+                      <p className="mt-1 max-w-sm text-sm text-slate-600">
                         {ticket.subject}
                       </p>
                     </td>
@@ -326,32 +524,54 @@ export default function Tickets() {
                     </td>
 
                     <td className="px-5 py-4">
-                      <span className={`text-sm font-medium ${priorityColor(ticket.priority)}`}>
+                      <span
+                        className={`text-sm font-semibold ${priorityColor(ticket.priority)}`}
+                      >
                         {formatStatus(ticket.priority)}
                       </span>
                     </td>
 
                     <td className="px-5 py-4">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusColor(ticket.status)}`}>
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${statusColor(ticket.status)}`}
+                      >
                         {formatStatus(ticket.status)}
                       </span>
+                    </td>
+
+                    <td className="px-5 py-4 text-sm">
+                      {ticket.assigned_to ? (
+                        <span className="font-medium text-slate-700">
+                          {attendants[ticket.assigned_to] || 'Atendente'}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                          Não atribuído
+                        </span>
+                      )}
                     </td>
 
                     <td className="px-5 py-4 text-sm text-slate-500">
                       {formatDate(ticket.created_at)}
                     </td>
+
                   </tr>
+
                 ))}
+
               </tbody>
             </table>
+
           </div>
         )}
 
+        {/* Rodapé */}
         {!loading && filteredTickets.length > 0 && (
           <div className="border-t border-slate-100 px-5 py-4 text-xs text-slate-500">
             Exibindo {filteredTickets.length} de {tickets.length} chamados.
           </div>
         )}
+
       </div>
     </div>
   )
