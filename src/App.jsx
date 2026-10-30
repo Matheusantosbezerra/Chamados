@@ -8,6 +8,7 @@ import {
   useLocation,
 } from 'react-router-dom'
 
+import Tickets from './pages/Tickets'
 import { supabase } from './lib/supabase'
 import AcceptInvitation from './pages/AcceptInvitation'
 import Sidebar from './components/Sidebar'
@@ -212,11 +213,29 @@ function AppRoutes() {
         path="/configurar-empresa"
         element={<Navigate to="/" replace />}
       />
+      <Route
+  path="/chamados"
+  element={
+    <div className="min-h-screen bg-slate-50">
+      <div className="flex min-h-screen">
+        <div className="hidden lg:block">
+          <Sidebar />
+        </div>
+
+        <main className="min-w-0 flex-1">
+          <Header />
+          <Tickets />
+        </main>
+      </div>
+    </div>
+  }
+/>
 
       <Route
         path="*"
         element={<Navigate to="/" replace />}
       />
+      
     </Routes>
   )
 }
