@@ -9,6 +9,8 @@ import {
   useLocation,
 } from 'react-router-dom'
 
+import { Building2 } from 'lucide-react'
+
 import { supabase } from './lib/supabase'
 
 import Customers from './pages/Customers'
@@ -19,6 +21,7 @@ import Header from './components/Header'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import ClientRegister from './pages/ClientRegister'
 import CreateOrganization from './pages/CreateOrganization'
 import Team from './pages/Team'
 
@@ -112,7 +115,40 @@ function ChooseArea() {
   )
 }
 
-// Tela temporária do portal
+// Tela de cadastro pendente
+function PendingCustomerRegistration() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+          <Building2 size={32} />
+        </div>
+
+        <h1 className="text-2xl font-bold text-slate-900">
+          Cadastro realizado!
+        </h1>
+
+        <p className="mt-3 text-slate-600">
+          Sua conta foi criada. Agora nossa equipe precisa associá-la
+          à empresa correspondente.
+        </p>
+
+        <p className="mt-3 text-sm text-slate-500">
+          Você poderá acessar o portal assim que essa associação for concluída.
+        </p>
+
+        <button
+          onClick={() => supabase.auth.signOut()}
+          className="mt-6 w-full rounded-lg border border-slate-300 px-4 py-3 font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Sair da conta
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Portal provisório do cliente
 function PortalPlaceholder() {
   return (
     <div className="min-h-screen bg-slate-50 p-8">
@@ -198,7 +234,7 @@ function AppRoutes() {
     }
   }, [])
 
-  // Verificar os dois tipos de vínculo
+  // Consultar os vínculos internos e de cliente
   useEffect(() => {
     let active = true
 
@@ -228,6 +264,12 @@ function AppRoutes() {
       if (!active) return
 
       if (membershipResult.error || customerResult.error) {
+        console.error(
+          'Erro ao verificar acessos:',
+          membershipResult.error,
+          customerResult.error
+        )
+
         setAccessError(
           'Não foi possível verificar seus acessos. Tente novamente.'
         )
@@ -248,6 +290,7 @@ function AppRoutes() {
     }
   }, [session, authLoading, location.pathname])
 
+  // Carregamento inicial
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -256,21 +299,33 @@ function AppRoutes() {
     )
   }
 
-  // Convites precisam ser acessíveis sem vínculo prévio
+  // Aceite de convite
   if (location.pathname === '/aceitar-convite') {
     return <AcceptInvitation />
   }
 
   const isAuthPage =
     location.pathname === '/login' ||
-    location.pathname === '/cadastro'
+    location.pathname === '/cadastro' ||
+    location.pathname === '/cadastro-cliente'
 
   // Usuário sem sessão
   if (!session) {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
+
         <Route path="/cadastro" element={<Register />} />
+
+        <Route
+          path="/cadastro-cliente"
+          element={<ClientRegister />}
+        />
+
+        <Route
+          path="/aceitar-convite"
+          element={<AcceptInvitation />}
+        />
 
         <Route
           path="*"
@@ -280,6 +335,7 @@ function AppRoutes() {
     )
   }
 
+  // Aguardar verificação dos vínculos
   if (accessLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -288,10 +344,13 @@ function AppRoutes() {
     )
   }
 
+  // Erro ao consultar permissões
   if (accessError) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
-        <p className="text-center text-red-600">{accessError}</p>
+        <p className="text-center text-red-600">
+          {accessError}
+        </p>
 
         <button
           onClick={() => window.location.reload()}
@@ -306,7 +365,17 @@ function AppRoutes() {
   const hasStaffAccess = memberships.length > 0
   const hasCustomerAccess = customerLinks.length > 0
 
-  // Usuário autenticado não precisa permanecer no login
+  const isPendingCustomer =
+    session.user.user_metadata?.account_type === 'customer' &&
+    !hasStaffAccess &&
+    !hasCustomerAccess
+
+  // Conta de cliente ainda sem empresa associada
+  if (isPendingCustomer) {
+    return <PendingCustomerRegistration />
+  }
+
+  // Usuário autenticado não precisa voltar ao cadastro
   if (isAuthPage) {
     if (hasStaffAccess && hasCustomerAccess) {
       return <Navigate to="/escolher-area" replace />
@@ -323,7 +392,7 @@ function AppRoutes() {
     return <Navigate to="/configurar-empresa" replace />
   }
 
-  // Usuário sem vínculos precisa configurar uma organização
+  // Usuário sem nenhum vínculo
   if (!hasStaffAccess && !hasCustomerAccess) {
     if (location.pathname === '/configurar-empresa') {
       return <CreateOrganization />
@@ -334,13 +403,16 @@ function AppRoutes() {
 
   return (
     <Routes>
-      {/* Escolha de ambiente */}
+      {/* Escolha do ambiente */}
       <Route
         path="/escolher-area"
         element={
           hasStaffAccess && hasCustomerAccess
             ? <ChooseArea />
-            : <Navigate to={hasStaffAccess ? '/' : '/portal'} replace />
+            : <Navigate
+                to={hasStaffAccess ? '/' : '/portal'}
+                replace
+              />
         }
       />
 
@@ -349,9 +421,11 @@ function AppRoutes() {
         path="/"
         element={
           hasStaffAccess
-            ? <StaffLayout>
+            ? (
+              <StaffLayout>
                 <Dashboard />
               </StaffLayout>
+            )
             : <Navigate to="/portal" replace />
         }
       />
@@ -369,7 +443,11 @@ function AppRoutes() {
         path="/equipe"
         element={
           hasStaffAccess
-            ? <StaffLayout><Team /></StaffLayout>
+            ? (
+              <StaffLayout>
+                <Team />
+              </StaffLayout>
+            )
             : <Navigate to="/portal" replace />
         }
       />
@@ -378,7 +456,11 @@ function AppRoutes() {
         path="/chamados"
         element={
           hasStaffAccess
-            ? <StaffLayout><Tickets /></StaffLayout>
+            ? (
+              <StaffLayout>
+                <Tickets />
+              </StaffLayout>
+            )
             : <Navigate to="/portal" replace />
         }
       />
@@ -387,7 +469,11 @@ function AppRoutes() {
         path="/clientes"
         element={
           hasStaffAccess
-            ? <StaffLayout><Customers /></StaffLayout>
+            ? (
+              <StaffLayout>
+                <Customers />
+              </StaffLayout>
+            )
             : <Navigate to="/portal" replace />
         }
       />
@@ -413,7 +499,7 @@ function AppRoutes() {
         }
       />
 
-      {/* Rota padrão */}
+      {/* Rota não encontrada */}
       <Route
         path="*"
         element={
