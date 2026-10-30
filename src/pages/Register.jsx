@@ -8,6 +8,7 @@ export default function Register() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -17,6 +18,17 @@ export default function Register() {
 
     setMessage('')
     setError('')
+
+    if (password.length < 8) {
+      setError('A senha precisa ter pelo menos 8 caracteres.')
+      return
+    }
+
+    if (password !== confirmPassword) {
+      setError('As senhas não coincidem. Verifique e tente novamente.')
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -134,6 +146,28 @@ export default function Register() {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             placeholder="Mínimo de 8 caracteres"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="register-confirm-password"
+            className="mb-1.5 block text-sm font-medium text-slate-700"
+          >
+            Confirmar senha
+          </label>
+
+          <input
+            id="register-confirm-password"
+            name="confirmPassword"
+            type="password"
+            autoComplete="new-password"
+            required
+            minLength={8}
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            placeholder="Digite sua senha novamente"
             className="w-full rounded-lg border border-slate-300 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
           />
         </div>
