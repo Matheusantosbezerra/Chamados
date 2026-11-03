@@ -1,10 +1,8 @@
-
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import {
   Headset,
   LogIn,
-  Building2,
   ArrowLeft,
   Mail,
   CheckCircle2,
@@ -12,8 +10,6 @@ import {
 import { supabase } from '../lib/supabase'
 
 export default function Login() {
-  const navigate = useNavigate()
-
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -36,10 +32,10 @@ export default function Login() {
 
       if (loginError) {
         setError('Não foi possível entrar. Confira seu e-mail e senha.')
-        return
       }
 
-      navigate('/', { replace: true })
+      // O App.jsx observa a sessão e direciona o usuário
+      // conforme os acessos vinculados à conta.
     } catch {
       setError('Erro de conexão. Tente novamente.')
     } finally {
@@ -60,12 +56,9 @@ export default function Login() {
 
     try {
       const { error: recoveryError } =
-        await supabase.auth.resetPasswordForEmail(
-          email.trim(),
-          {
-            redirectTo: `${window.location.origin}/redefinir-senha`,
-          }
-        )
+        await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: `${window.location.origin}/redefinir-senha`,
+        })
 
       if (recoveryError) {
         setError('Não foi possível enviar o e-mail. Tente novamente.')
@@ -89,8 +82,6 @@ export default function Login() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
       <div className="w-full max-w-md space-y-6 rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
-
-        {/* Logo */}
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-white">
             <Headset size={30} />
@@ -107,7 +98,6 @@ export default function Login() {
           </p>
         </div>
 
-        {/* Recuperação de senha */}
         {forgotPassword ? (
           recoverySent ? (
             <div className="space-y-5 text-center">
@@ -121,8 +111,8 @@ export default function Login() {
                 </h2>
 
                 <p className="mt-2 text-sm text-slate-500">
-                  Se o endereço informado estiver cadastrado,
-                  você receberá um link para redefinir sua senha.
+                  Se o endereço informado estiver cadastrado, você receberá
+                  um link para redefinir sua senha.
                 </p>
 
                 <p className="mt-3 break-all text-sm font-medium text-slate-700">
@@ -191,7 +181,6 @@ export default function Login() {
           )
         ) : (
           <>
-            {/* Formulário de login */}
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
                 <label
@@ -267,55 +256,36 @@ export default function Login() {
               </button>
             </form>
 
-            {/* Opções de cadastro */}
             <div className="border-t border-slate-200 pt-5">
               <p className="mb-4 text-center text-sm font-medium text-slate-700">
-                Ainda não tem conta?
+                Sua empresa ainda não utiliza o Inderio Desk?
               </p>
 
-              <div className="space-y-3">
-                <Link
-                  to="/cadastro"
-                  className="flex items-center gap-3 rounded-xl border border-slate-200 p-4 transition hover:border-blue-400 hover:bg-blue-50"
-                >
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
-                    <Headset size={22} />
-                  </div>
+              <Link
+                to="/cadastro"
+                className="flex items-center gap-3 rounded-xl border border-slate-200 p-4 transition hover:border-blue-400 hover:bg-blue-50"
+              >
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
+                  <Headset size={22} />
+                </div>
 
-                  <div className="flex-1">
-                    <p className="font-semibold text-slate-800">
-                      Criar conta de atendimento
-                    </p>
+                <div className="flex-1">
+                  <p className="font-semibold text-slate-800">
+                    Criar conta de atendimento
+                  </p>
 
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Para empresas que gerenciam chamados.
-                    </p>
-                  </div>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Para empresas que gerenciam chamados.
+                  </p>
+                </div>
 
-                  <span className="text-slate-400">→</span>
-                </Link>
+                <span className="text-slate-400">→</span>
+              </Link>
 
-                <Link
-                  to="/cadastro-cliente"
-                  className="flex items-center gap-3 rounded-xl border border-slate-200 p-4 transition hover:border-green-400 hover:bg-green-50"
-                >
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-green-100 text-green-600">
-                    <Building2 size={22} />
-                  </div>
-
-                  <div className="flex-1">
-                    <p className="font-semibold text-slate-800">
-                      Criar conta de cliente
-                    </p>
-
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Para abrir e acompanhar seus chamados.
-                    </p>
-                  </div>
-
-                  <span className="text-slate-400">→</span>
-                </Link>
-              </div>
+              <p className="mt-4 text-center text-xs text-slate-500">
+                É cliente? Peça à sua empresa de atendimento um convite para
+                acessar o portal.
+              </p>
             </div>
           </>
         )}
