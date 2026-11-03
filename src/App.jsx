@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react'
 import {
   BrowserRouter,
@@ -10,7 +9,6 @@ import {
 } from 'react-router-dom'
 
 import { Building2 } from 'lucide-react'
-
 import { supabase } from './lib/supabase'
 
 import ResetPassword from './pages/ResetPassword'
@@ -23,7 +21,6 @@ import Header from './components/Header'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import Register from './pages/Register'
-import ClientRegister from './pages/ClientRegister'
 import CreateOrganization from './pages/CreateOrganization'
 import Team from './pages/Team'
 
@@ -131,12 +128,12 @@ function PendingCustomerRegistration() {
         </h1>
 
         <p className="mt-3 text-slate-600">
-          Sua conta foi criada. Agora nossa equipe precisa associá-la
-          à empresa correspondente.
+          Sua conta foi criada, mas ainda não está vinculada à empresa que enviou
+          seu convite. Entre em contato com essa empresa para verificar o convite.
         </p>
 
         <p className="mt-3 text-sm text-slate-500">
-          Você poderá acessar o portal assim que essa associação for concluída.
+          Você poderá acessar o portal assim que o vínculo for concluído.
         </p>
 
         <button
@@ -180,8 +177,8 @@ function PortalPlaceholder() {
           </h2>
 
           <p className="mt-2 text-slate-500">
-            Aqui você poderá abrir chamados, acompanhar solicitações
-            e responder às mensagens da equipe de atendimento.
+            Aqui você poderá abrir chamados, acompanhar solicitações e responder
+            às mensagens da equipe de atendimento.
           </p>
         </div>
       </div>
@@ -231,7 +228,6 @@ function AppRoutes() {
 
       if (event === 'PASSWORD_RECOVERY') {
         // O usuário permanece na página de redefinição.
-        // Não redirecionar para o painel.
       }
     })
 
@@ -297,9 +293,7 @@ function AppRoutes() {
     }
   }, [session, authLoading, location.pathname])
 
-  // IMPORTANTE:
   // A redefinição tem prioridade sobre qualquer verificação de acesso.
-  // Todos os Hooks já foram declarados acima.
   if (location.pathname === '/redefinir-senha') {
     return <ResetPassword />
   }
@@ -320,27 +314,18 @@ function AppRoutes() {
 
   const isAuthPage =
     location.pathname === '/login' ||
-    location.pathname === '/cadastro' ||
-    location.pathname === '/cadastro-cliente'
+    location.pathname === '/cadastro'
 
   // Usuário sem sessão
   if (!session) {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
-
         <Route path="/cadastro" element={<Register />} />
-
-        <Route
-          path="/cadastro-cliente"
-          element={<ClientRegister />}
-        />
-
         <Route
           path="/aceitar-convite"
           element={<AcceptInvitation />}
         />
-
         <Route
           path="*"
           element={<Navigate to="/login" replace />}
@@ -362,9 +347,7 @@ function AppRoutes() {
   if (accessError) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
-        <p className="text-center text-red-600">
-          {accessError}
-        </p>
+        <p className="text-center text-red-600">{accessError}</p>
 
         <button
           onClick={() => window.location.reload()}
@@ -384,12 +367,12 @@ function AppRoutes() {
     !hasStaffAccess &&
     !hasCustomerAccess
 
-  // Conta de cliente ainda sem empresa associada
+  // Conta de cliente ainda sem vínculo
   if (isPendingCustomer) {
     return <PendingCustomerRegistration />
   }
 
-  // Usuário autenticado não precisa voltar ao cadastro
+  // Usuário autenticado não precisa voltar ao cadastro ou login
   if (isAuthPage) {
     if (hasStaffAccess && hasCustomerAccess) {
       return <Navigate to="/escolher-area" replace />
@@ -421,12 +404,14 @@ function AppRoutes() {
       <Route
         path="/escolher-area"
         element={
-          hasStaffAccess && hasCustomerAccess
-            ? <ChooseArea />
-            : <Navigate
-                to={hasStaffAccess ? '/' : '/portal'}
-                replace
-              />
+          hasStaffAccess && hasCustomerAccess ? (
+            <ChooseArea />
+          ) : (
+            <Navigate
+              to={hasStaffAccess ? '/' : '/portal'}
+              replace
+            />
+          )
         }
       />
 
@@ -434,48 +419,50 @@ function AppRoutes() {
       <Route
         path="/"
         element={
-          hasStaffAccess
-            ? (
-              <StaffLayout>
-                <Dashboard />
-              </StaffLayout>
-            )
-            : <Navigate to="/portal" replace />
+          hasStaffAccess ? (
+            <StaffLayout>
+              <Dashboard />
+            </StaffLayout>
+          ) : (
+            <Navigate to="/portal" replace />
+          )
         }
       />
 
       <Route
         path="/atendimento"
         element={
-          hasStaffAccess
-            ? <Navigate to="/" replace />
-            : <Navigate to="/portal" replace />
+          hasStaffAccess ? (
+            <Navigate to="/" replace />
+          ) : (
+            <Navigate to="/portal" replace />
+          )
         }
       />
 
       <Route
         path="/equipe"
         element={
-          hasStaffAccess
-            ? (
-              <StaffLayout>
-                <Team />
-              </StaffLayout>
-            )
-            : <Navigate to="/portal" replace />
+          hasStaffAccess ? (
+            <StaffLayout>
+              <Team />
+            </StaffLayout>
+          ) : (
+            <Navigate to="/portal" replace />
+          )
         }
       />
 
       <Route
         path="/chamados"
         element={
-          hasStaffAccess
-            ? (
-              <StaffLayout>
-                <Tickets />
-              </StaffLayout>
-            )
-            : <Navigate to="/portal" replace />
+          hasStaffAccess ? (
+            <StaffLayout>
+              <Tickets />
+            </StaffLayout>
+          ) : (
+            <Navigate to="/portal" replace />
+          )
         }
       />
 
@@ -495,24 +482,26 @@ function AppRoutes() {
       <Route
         path="/clientes"
         element={
-          hasStaffAccess
-            ? (
-              <StaffLayout>
-                <Customers />
-              </StaffLayout>
-            )
-            : <Navigate to="/portal" replace />
+          hasStaffAccess ? (
+            <StaffLayout>
+              <Customers />
+            </StaffLayout>
+          ) : (
+            <Navigate to="/portal" replace />
+          )
         }
       />
 
       <Route
         path="/configurar-empresa"
         element={
-          hasStaffAccess
-            ? <Navigate to="/" replace />
-            : hasCustomerAccess
-              ? <Navigate to="/portal" replace />
-              : <CreateOrganization />
+          hasStaffAccess ? (
+            <Navigate to="/" replace />
+          ) : hasCustomerAccess ? (
+            <Navigate to="/portal" replace />
+          ) : (
+            <CreateOrganization />
+          )
         }
       />
 
@@ -520,9 +509,11 @@ function AppRoutes() {
       <Route
         path="/portal/*"
         element={
-          hasCustomerAccess
-            ? <PortalPlaceholder />
-            : <Navigate to="/" replace />
+          hasCustomerAccess ? (
+            <PortalPlaceholder />
+          ) : (
+            <Navigate to="/" replace />
+          )
         }
       />
 
