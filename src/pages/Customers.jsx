@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Search,
@@ -8,8 +9,9 @@ import {
   RefreshCw,
   Mail,
   Phone,
-  Building2,
   KeyRound,
+  Building2,
+  AlertCircle,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -36,30 +38,34 @@ function canManageRole(role) {
 }
 
 async function getFunctionErrorMessage(error) {
-  const response = error?.context
+  const context = error?.context
 
-  if (response && typeof response.clone === 'function') {
-    const clone = response.clone()
-    let responseText = ''
+  if (context && typeof context.clone === 'function') {
+    const response = context.clone()
+    const status = response.status
+    const contentType = response.headers?.get('content-type') || ''
 
     try {
-      responseText = await clone.text()
-    } catch {
-      responseText = ''
-    }
-
-    if (responseText) {
-      try {
-        const body = JSON.parse(responseText)
+      if (contentType.includes('application/json')) {
+        const body = await response.json()
         const message =
-          body.message || body.error || body.details || body.msg || responseText
-        return `Erro HTTP ${response.status}: ${message}`
-      } catch {
-        return `Erro HTTP ${response.status}: ${responseText}`
+          body?.error || body?.message || body?.details || body?.msg || JSON.stringify(body)
+        const stage = body?.stage ? ` (${body.stage})` : ''
+        return `Erro HTTP ${status}${stage}: ${message}`
       }
+
+      const text = await response.text()
+      if (text) return `Erro HTTP ${status}: ${text}`
+    } catch (readError) {
+      console.error('Não foi possível ler a resposta da Edge Function:', readError)
     }
 
-    return `A função respondeu com HTTP ${response.status}, mas não retornou detalhes.`
+    return `A Edge Function respondeu com HTTP ${status}, mas não retornou detalhes.`
+  }
+
+  if (context && typeof context === 'object') {
+    const message = context.message || context.error || context.details
+    if (message) return message
   }
 
   return error?.message || 'Erro desconhecido ao executar a Edge Function.'
@@ -133,9 +139,9 @@ export default function Customers() {
 
       if (membershipError) throw membershipError
 
-      const organizationIds = [...new Set((memberships || [])
-        .map((item) => item.organization_id)
-        .filter(Boolean))]
+      const organizationIds = [...new Set(
+        (memberships || []).map((item) => item.organization_id).filter(Boolean),
+      )]
 
       const nextRoles = Object.fromEntries(
         (memberships || []).map((item) => [item.organization_id, item.role]),
@@ -324,13 +330,15 @@ export default function Customers() {
 
         <div className="flex gap-2">
           <button
+            type="button"
             onClick={loadCustomers}
             disabled={loading}
             className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            <RefreshCw size={17} /> Atualizar
+            <RefreshCw size={17} className={loading ? 'animate-spin' : ''} /> Atualizar
           </button>
           <button
+            type="button"
             onClick={openNewCustomer}
             disabled={manageableOrganizations.length === 0}
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -360,8 +368,11 @@ export default function Customers() {
           <p className="mt-2 text-3xl font-bold text-slate-900">{customers.length}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <p className="text-sm text-slate-500">Empresas atendidas</p>
-          <p className="mt-2 text-3xl font-bold text-green-600">{companies.length}</p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-500">Empresas atendidas</p>
+            <Building2 className="text-green-600" size={20} />
+          </div>
+          <p className="mt-2 text-3xl font-bold text-slate-900">{companies.length}</p>
         </div>
       </div>
 
@@ -380,9 +391,15 @@ export default function Customers() {
 
         {loading ? (
           <div className="p-12 text-center text-sm text-slate-500">Carregando clientes...</div>
+        ) : error && customers.length === 0 ? (
+          <div className="flex items-center gap-2 p-8 text-sm text-red-700">
+            <AlertCircle size={18} /> {error}
+          </div>
         ) : filteredCustomers.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center">
-            <div className="mb-4 rounded-full bg-slate-100 p-4"><Users size={28} className="text-slate-400" /></div>
+            <div className="mb-4 rounded-full bg-slate-100 p-4">
+              <Users size={28} className="text-slate-400" />
+            </div>
             <h3 className="font-semibold text-slate-800">
               {customers.length === 0 ? 'Nenhum cliente cadastrado' : 'Nenhum cliente encontrado'}
             </h3>
@@ -427,6 +444,7 @@ export default function Customers() {
                         {allowed && (
                           <div className="flex justify-end gap-1">
                             <button
+                              type="button"
                               onClick={() => openEditCustomer(customer)}
                               title="Editar cliente"
                               className="rounded-lg p-2 text-slate-500 hover:bg-blue-50 hover:text-blue-700"
@@ -434,6 +452,7 @@ export default function Customers() {
                               <Pencil size={16} />
                             </button>
                             <button
+                              type="button"
                               onClick={() => handleResetPassword(customer)}
                               disabled={!customer.email || resettingId === customer.id}
                               title="Enviar redefinição de senha"
@@ -469,71 +488,110 @@ export default function Customers() {
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">Preencha os dados do cliente.</p>
               </div>
-              <button onClick={closeModal} disabled={saving} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">
+              <button type="button" onClick={closeModal} disabled={saving} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">
                 <X size={20} />
               </button>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4 p-5">
               {error && (
-                <div className="whitespace-pre-wrap break-words rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                  {error}
+                <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  <AlertCircle size={17} className="mt-0.5 shrink-0" />
+                  <span className="break-words">{error}</span>
                 </div>
               )}
 
               {!editingCustomer && (
                 <>
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Organização prestadora</label>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Organização</label>
                     <select
                       required
                       value={form.organization_id}
-                      onChange={(event) => setForm({ ...form, organization_id: event.target.value, client_company_id: '' })}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500"
+                      onChange={(event) => setForm({
+                        ...form,
+                        organization_id: event.target.value,
+                        client_company_id: '',
+                      })}
+                      className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
                     >
                       <option value="">Selecione a organização</option>
-                      {manageableOrganizations.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
+                      {manageableOrganizations.map((org) => (
+                        <option key={org.id} value={org.id}>{org.name}</option>
+                      ))}
                     </select>
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Empresa do cliente</label>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Empresa do cliente</label>
                     <select
                       required
                       value={form.client_company_id}
                       onChange={(event) => setForm({ ...form, client_company_id: event.target.value })}
-                      disabled={!form.organization_id}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 disabled:bg-slate-50"
+                      disabled={!form.organization_id || filteredCompanies.length === 0}
+                      className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:bg-slate-50"
                     >
                       <option value="">Selecione a empresa</option>
-                      {filteredCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+                      {filteredCompanies.map((company) => (
+                        <option key={company.id} value={company.id}>{company.name}</option>
+                      ))}
                     </select>
                     {form.organization_id && filteredCompanies.length === 0 && (
-                      <p className="mt-1 text-xs text-amber-700">Cadastre uma empresa em Organizações antes de adicionar clientes.</p>
+                      <p className="mt-1 text-xs text-amber-700">Cadastre uma empresa em Organizações antes de cadastrar o cliente.</p>
                     )}
                   </div>
                 </>
               )}
 
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">Nome completo *</label>
-                <input required maxLength={150} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Nome do cliente" className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
+                <label className="mb-2 block text-sm font-medium text-slate-700">Nome completo *</label>
+                <input
+                  required
+                  maxLength={150}
+                  value={form.name}
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
+                  placeholder="Nome do cliente"
+                  className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
               </div>
 
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">E-mail</label>
-                <input type="email" required={!editingCustomer} maxLength={254} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="cliente@email.com" className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
-                {editingCustomer && <p className="mt-1 text-xs text-slate-500">A alteração deste campo atualiza o cadastro, mas não altera automaticamente o e-mail de login do Supabase Auth.</p>}
+                <label className="mb-2 block text-sm font-medium text-slate-700">E-mail *</label>
+                <input
+                  type="email"
+                  required={!editingCustomer}
+                  maxLength={254}
+                  value={form.email}
+                  onChange={(event) => setForm({ ...form, email: event.target.value })}
+                  placeholder="cliente@email.com"
+                  className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
+                {editingCustomer && (
+                  <p className="mt-1 text-xs text-amber-700">Alterar este campo atualiza o cadastro do cliente, mas não altera automaticamente o e-mail de login do Auth.</p>
+                )}
               </div>
 
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">Telefone</label>
-                <input type="tel" maxLength={30} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="(00) 00000-0000" className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500" />
+                <label className="mb-2 block text-sm font-medium text-slate-700">Telefone</label>
+                <input
+                  type="tel"
+                  maxLength={30}
+                  value={form.phone}
+                  onChange={(event) => setForm({ ...form, phone: event.target.value })}
+                  placeholder="(00) 00000-0000"
+                  className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
               </div>
 
               <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
-                <button type="button" onClick={closeModal} disabled={saving} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancelar</button>
-                <button type="submit" disabled={saving || (!editingCustomer && filteredCompanies.length === 0)} className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                <button type="button" onClick={closeModal} disabled={saving} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving || (!editingCustomer && filteredCompanies.length === 0)}
+                  className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
                   {saving ? 'Salvando...' : editingCustomer ? 'Salvar alterações' : 'Cadastrar cliente'}
                 </button>
               </div>
