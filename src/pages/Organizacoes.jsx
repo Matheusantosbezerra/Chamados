@@ -1,5 +1,4 @@
-
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Building2,
   Plus,
@@ -7,6 +6,7 @@ import {
   Pencil,
   X,
   Search,
+  RefreshCw,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -15,6 +15,33 @@ const emptyForm = {
   email: '',
   phone: '',
   organization_id: '',
+}
+
+const MANAGEMENT_ROLES = new Set([
+  'OWNER',
+  'ADMIN',
+  'PROPRIETARIO',
+  'ADMINISTRADOR',
+])
+
+function normalizeRole(role) {
+  return String(role || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_')
+}
+
+function getErrorMessage(err) {
+  if (err?.code === '42501') {
+    return (
+      'O Supabase bloqueou a operação por falta de permissão (RLS). ' +
+      'Confira a política INSERT ou UPDATE da tabela client_companies.'
+    )
+  }
+
+  return err?.message || 'Não foi possível concluir a operação.'
 }
 
 export default function Organizacoes() {
@@ -34,10 +61,15 @@ export default function Organizacoes() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  const canManage = (organizationId) =>
-    ['OWNER', 'ADMIN'].includes(roles[organizationId])
+  const canManage = useCallback(
+    (organizationId) => {
+      const role = normalizeRole(roles[organizationId])
+      return MANAGEMENT_ROLES.has(role)
+    },
+    [roles]
+  )
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true)
     setError('')
 
@@ -45,7 +77,8 @@ export default function Organizacoes() {
       const { data: authData, error: authError } =
         await supabase.auth.getUser()
 
-      if (authError || !authData.user) {
+      if (authError) throw authError
+      if (!authData?.user) {
         throw new Error('Sua sessão expirou. Entre novamente.')
       }
 
@@ -57,29 +90,29 @@ export default function Organizacoes() {
 
       if (membershipError) throw membershipError
 
-      const ids = [
+      const membershipList = memberships || []
+      const organizationIds = [
         ...new Set(
-          (memberships || [])
+          membershipList
             .map((item) => item.organization_id)
             .filter(Boolean)
         ),
       ]
 
-      if (ids.length === 0) {
+      const roleMap = Object.fromEntries(
+        membershipList.map((item) => [
+          item.organization_id,
+          normalizeRole(item.role),
+        ])
+      )
+
+      setRoles(roleMap)
+
+      if (organizationIds.length === 0) {
         setOrganizations([])
         setCompanies([])
-        setRoles({})
         return
       }
-
-      setRoles(
-        Object.fromEntries(
-          memberships.map((item) => [
-            item.organization_id,
-            item.role,
-          ])
-        )
-      )
 
       const [
         { data: organizationData, error: organizationError },
@@ -88,7 +121,7 @@ export default function Organizacoes() {
         supabase
           .from('organizations')
           .select('id, name')
-          .in('id', ids)
+          .in('id', organizationIds)
           .order('name'),
 
         supabase
@@ -101,7 +134,7 @@ export default function Organizacoes() {
             phone,
             created_at
           `)
-          .in('organization_id', ids)
+          .in('organization_id', organizationIds)
           .order('name'),
       ])
 
@@ -112,15 +145,15 @@ export default function Organizacoes() {
       setCompanies(companyData || [])
     } catch (err) {
       console.error('Erro ao carregar organizações:', err)
-      setError(err.message || 'Não foi possível carregar as organizações.')
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
 
   const filteredCompanies = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -190,13 +223,24 @@ export default function Organizacoes() {
       return
     }
 
-    if (!form.organization_id) {
+    const targetOrganizationId =
+      editing?.organization_id || form.organization_id
+
+    if (!targetOrganizationId) {
       setError('Selecione a organização prestadora.')
       return
     }
 
-    if (!canManage(form.organization_id)) {
-      setError('Você não tem permissão para essa operação.')
+    if (!canManage(targetOrganizationId)) {
+      console.error('Papel sem permissão:', {
+        organizationId: targetOrganizationId,
+        role: roles[targetOrganizationId],
+        roles,
+      })
+      setError(
+        'Seu vínculo não está reconhecido como OWNER ou ADMIN nesta organização. ' +
+        'Atualize a página e confira o papel cadastrado em memberships.'
+      )
       return
     }
 
@@ -224,7 +268,7 @@ export default function Organizacoes() {
           .from('client_companies')
           .insert({
             ...companyData,
-            organization_id: form.organization_id,
+            organization_id: targetOrganizationId,
           })
 
         if (insertError) throw insertError
@@ -235,49 +279,75 @@ export default function Organizacoes() {
       setModalOpen(false)
       setEditing(null)
       setForm(emptyForm)
+      setActiveMenu(null)
 
       await loadData()
     } catch (err) {
-      console.error('Erro ao salvar organização:', err)
+      console.error('Erro ao salvar organização:', {
+        message: err?.message,
+        code: err?.code,
+        details: err?.details,
+        hint: err?.hint,
+        error: err,
+      })
 
-      setError(
-        err.code === '42501'
-          ? 'Você não tem permissão para realizar essa operação.'
-          : err.message || 'Não foi possível salvar a organização.'
-      )
+      setError(getErrorMessage(err))
     } finally {
       setSaving(false)
     }
   }
+
+  const manageableOrganizations = organizations.filter((org) =>
+    canManage(org.id)
+  )
 
   return (
     <div
       className="space-y-6 p-4 sm:p-6 lg:p-8"
       onClick={() => activeMenu && setActiveMenu(null)}
     >
-      {/* Cabeçalho */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
             Organizações
           </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Gerencie as empresas atendidas pela sua organização.
+          </p>
         </div>
 
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation()
-            openCreate()
-          }}
-          disabled={!organizations.some((org) => canManage(org.id))}
-          className="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Plus size={17} />
-          Criar Organização
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              loadData()
+            }}
+            disabled={loading}
+            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <RefreshCw
+              size={16}
+              className={loading ? 'animate-spin' : ''}
+            />
+            Atualizar
+          </button>
+
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              openCreate()
+            }}
+            disabled={manageableOrganizations.length === 0}
+            className="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus size={17} />
+            Criar Organização
+          </button>
+        </div>
       </div>
 
-      {/* Mensagens */}
       {success && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
           {success}
@@ -290,13 +360,11 @@ export default function Organizacoes() {
         </div>
       )}
 
-      {/* Pesquisa */}
       <div className="relative">
         <Search
           size={17}
           className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
         />
-
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -305,7 +373,6 @@ export default function Organizacoes() {
         />
       </div>
 
-      {/* Tabela */}
       <div className="overflow-visible rounded-lg border border-slate-200 bg-white">
         {loading ? (
           <div className="p-12 text-center text-sm text-slate-500">
@@ -314,11 +381,9 @@ export default function Organizacoes() {
         ) : filteredCompanies.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center">
             <Building2 size={32} className="mb-3 text-slate-300" />
-
             <h3 className="font-semibold text-slate-800">
               Nenhuma organização encontrada
             </h3>
-
             <p className="mt-1 text-sm text-slate-500">
               Cadastre uma organização para começar.
             </p>
@@ -328,22 +393,10 @@ export default function Organizacoes() {
             <table className="w-full min-w-[850px] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-slate-700">
-                  <th className="px-4 py-3 font-semibold">
-                    Nome
-                  </th>
-
-                  <th className="px-4 py-3 font-semibold">
-                    Matriz
-                  </th>
-
-                  <th className="px-4 py-3 font-semibold">
-                    Email
-                  </th>
-
-                  <th className="px-4 py-3 font-semibold">
-                    Telefone
-                  </th>
-
+                  <th className="px-4 py-3 font-semibold">Nome</th>
+                  <th className="px-4 py-3 font-semibold">Matriz</th>
+                  <th className="px-4 py-3 font-semibold">Email</th>
+                  <th className="px-4 py-3 font-semibold">Telefone</th>
                   <th className="w-24 px-4 py-3 text-center font-semibold">
                     Opções
                   </th>
@@ -359,19 +412,13 @@ export default function Organizacoes() {
                     <td className="px-4 py-3 text-slate-700">
                       {company.name}
                     </td>
-
-                    <td className="px-4 py-3 text-slate-500">
-                      —
-                    </td>
-
+                    <td className="px-4 py-3 text-slate-500">—</td>
                     <td className="px-4 py-3 text-slate-600">
                       {company.email || '—'}
                     </td>
-
                     <td className="px-4 py-3 text-slate-600">
                       {company.phone || '—'}
                     </td>
-
                     <td className="px-4 py-3 text-center">
                       {canManage(company.organization_id) && (
                         <div className="relative inline-block">
@@ -423,7 +470,6 @@ export default function Organizacoes() {
         )}
       </div>
 
-      {/* Modal de cadastro/edição */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/40 p-4">
           <div className="my-auto w-full max-w-lg rounded-xl bg-white shadow-xl">
@@ -432,7 +478,6 @@ export default function Organizacoes() {
                 <h2 className="text-lg font-bold text-slate-900">
                   {editing ? 'Editar Organização' : 'Criar Organização'}
                 </h2>
-
                 <p className="mt-1 text-sm text-slate-500">
                   Informe os dados da empresa atendida.
                 </p>
@@ -460,7 +505,6 @@ export default function Organizacoes() {
                   <label className="mb-1.5 block text-sm font-medium text-slate-700">
                     Organização prestadora
                   </label>
-
                   <select
                     required
                     value={form.organization_id}
@@ -473,15 +517,29 @@ export default function Organizacoes() {
                     className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500"
                   >
                     <option value="">Selecione</option>
-
-                    {organizations
-                      .filter((org) => canManage(org.id))
-                      .map((org) => (
-                        <option key={org.id} value={org.id}>
-                          {org.name}
-                        </option>
-                      ))}
+                    {manageableOrganizations.map((org) => (
+                      <option key={org.id} value={org.id}>
+                        {org.name}
+                      </option>
+                    ))}
                   </select>
+                </div>
+              )}
+
+              {editing && (
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Organização prestadora
+                  </label>
+                  <input
+                    disabled
+                    value={
+                      organizations.find(
+                        (org) => org.id === editing.organization_id
+                      )?.name || ''
+                    }
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm"
+                  />
                 </div>
               )}
 
@@ -489,7 +547,6 @@ export default function Organizacoes() {
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">
                   Nome da organização *
                 </label>
-
                 <input
                   required
                   maxLength={150}
@@ -506,7 +563,6 @@ export default function Organizacoes() {
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">
                   E-mail
                 </label>
-
                 <input
                   type="email"
                   maxLength={254}
@@ -523,7 +579,6 @@ export default function Organizacoes() {
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">
                   Telefone
                 </label>
-
                 <input
                   type="tel"
                   maxLength={30}
@@ -545,7 +600,6 @@ export default function Organizacoes() {
                 >
                   Cancelar
                 </button>
-
                 <button
                   type="submit"
                   disabled={saving}
