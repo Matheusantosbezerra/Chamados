@@ -165,8 +165,9 @@ export default function ClientPortal() {
       // A política RLS do SQL limita esta consulta aos chamados da empresa vinculada.
       const { data: ticketData, error: ticketsError } = await supabase
         .from('tickets')
-        .select('id, number, subject, description, status, priority, customer_id, created_at, updated_at, organization_id')
+        .select('id, number, subject, description, status, priority, customer_id, client_company_id, created_at, updated_at, organization_id')
         .eq('organization_id', customerData.organization_id)
+        .eq('client_company_id', customerData.client_company_id)
         .order('created_at', { ascending: false })
 
       if (ticketsError) throw ticketsError
@@ -239,6 +240,7 @@ export default function ClientPortal() {
         .from('tickets')
         .insert({
           organization_id: currentCustomer.organization_id,
+          client_company_id: currentCustomer.client_company_id,
           customer_id: currentCustomer.id,
           subject,
           description,
