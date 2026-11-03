@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react'
 import {
   BrowserRouter,
@@ -14,6 +15,7 @@ import { supabase } from './lib/supabase'
 import ResetPassword from './pages/ResetPassword'
 import TicketDetails from './pages/TicketDetails'
 import Customers from './pages/Customers'
+import Organizacoes from './pages/Organizacoes'
 import Tickets from './pages/Tickets'
 import AcceptInvitation from './pages/AcceptInvitation'
 import Sidebar from './components/Sidebar'
@@ -415,7 +417,7 @@ function AppRoutes() {
         }
       />
 
-      {/* Área interna */}
+      {/* Dashboard */}
       <Route
         path="/"
         element={
@@ -440,6 +442,7 @@ function AppRoutes() {
         }
       />
 
+      {/* Equipe */}
       <Route
         path="/equipe"
         element={
@@ -453,6 +456,7 @@ function AppRoutes() {
         }
       />
 
+      {/* Chamados */}
       <Route
         path="/chamados"
         element={
@@ -466,6 +470,7 @@ function AppRoutes() {
         }
       />
 
+      {/* Detalhes do chamado */}
       <Route
         path="/chamados/:id"
         element={
@@ -479,6 +484,7 @@ function AppRoutes() {
         }
       />
 
+      {/* Clientes */}
       <Route
         path="/clientes"
         element={
@@ -492,6 +498,21 @@ function AppRoutes() {
         }
       />
 
+      {/* Organizações */}
+      <Route
+        path="/organizacoes"
+        element={
+          hasStaffAccess ? (
+            <StaffLayout>
+              <Organizacoes />
+            </StaffLayout>
+          ) : (
+            <Navigate to="/portal" replace />
+          )
+        }
+      />
+
+      {/* Configuração da empresa */}
       <Route
         path="/configurar-empresa"
         element={
