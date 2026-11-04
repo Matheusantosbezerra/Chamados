@@ -94,17 +94,19 @@ function isInProgress(status) {
 
 function statusLabel(status) {
   const value = normalize(status)
-  if (isClosed(value)) return 'Resolvido'
+  if (value === 'closed' || value.includes('fechado')) return 'Fechado'
+  if (value === 'resolved' || value.includes('resolvido') || value.includes('finalizado') || value.includes('concluido')) return 'Resolvido'
+  if (value === 'waiting customer' || value.includes('aguardando cliente') || value.includes('pendente')) return 'Aguardando cliente'
   if (isInProgress(value)) return 'Em atendimento'
-  if (value.includes('pendente')) return 'Pendente'
-  if (value.includes('open') || value.includes('aberto')) return 'Aberto'
+  if (value === 'open' || value.includes('aberto')) return 'Aberto'
   return status || 'Aberto'
 }
 
 function statusClass(status) {
-  if (isClosed(status)) return 'bg-emerald-50 text-emerald-700'
-  if (isInProgress(status)) return 'bg-amber-50 text-amber-700'
-  if (normalize(status).includes('pendente')) return 'bg-violet-50 text-violet-700'
+  const value = normalize(status)
+  if (value === 'closed' || value === 'resolved' || value.includes('fechado') || value.includes('resolvido')) return 'bg-emerald-50 text-emerald-700'
+  if (value === 'waiting customer' || value.includes('aguardando cliente') || value.includes('pendente')) return 'bg-violet-50 text-violet-700'
+  if (isInProgress(value)) return 'bg-amber-50 text-amber-700'
   return 'bg-blue-50 text-blue-700'
 }
 
@@ -421,7 +423,7 @@ export default function ClientPortal() {
             subject,
             description,
             priority: form.priority,
-            status: 'aberto',
+            status: 'OPEN',
           })
           .select('id, number')
           .single()
