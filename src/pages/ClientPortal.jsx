@@ -161,6 +161,7 @@ export default function ClientPortal() {
   const [pendingTicket, setPendingTicket] = useState(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
+  const [selectedTicket, setSelectedTicket] = useState(null)
 
   const loadPortal = useCallback(async () => {
     setLoading(true)
@@ -692,13 +693,27 @@ export default function ClientPortal() {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredTickets.map((ticket) => (
-                          <tr key={ticket.id} className="group transition hover:bg-blue-50/40">
+                          <tr
+                            key={ticket.id}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Ver detalhes do chamado ${ticket.number ? `número ${ticket.number}` : ''} ${ticket.subject || ''}`}
+                            onClick={() => setSelectedTicket(ticket)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                setSelectedTicket(ticket)
+                              }
+                            }}
+                            className="group cursor-pointer transition hover:bg-blue-50/60 focus-within:bg-blue-50/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                          >
                             <td className="px-6 py-4">
                               <div className="flex min-w-0 items-start gap-3">
                                 <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition group-hover:bg-blue-100 group-hover:text-blue-700"><Ticket size={16} /></div>
                                 <div className="min-w-0">
                                   <p className="text-xs font-semibold text-blue-700">#{ticket.number ?? String(ticket.id).slice(0, 8)}</p>
-                                  <p className="mt-1 max-w-[360px] truncate font-semibold text-slate-800">{ticket.subject}</p>
+                                  <p className="mt-1 max-w-[360px] truncate font-semibold text-slate-800 group-hover:text-blue-700">{ticket.subject}</p>
+                                  <p className="mt-1 text-[10px] font-medium text-slate-400 opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">Clique para ver detalhes</p>
                                   {ticket.attachments?.length > 0 && (
                                     <div className="mt-2 flex flex-wrap gap-2">
                                       {ticket.attachments.map((attachment) => (
@@ -708,6 +723,7 @@ export default function ClientPortal() {
                                             href={attachment.signed_url}
                                             target="_blank"
                                             rel="noreferrer"
+                                            onClick={(event) => event.stopPropagation()}
                                             title={attachment.file_name}
                                             className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
                                           >
@@ -903,6 +919,103 @@ export default function ClientPortal() {
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* Modal de detalhes do chamado selecionado */}
+      {selectedTicket && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-950/60 p-3 backdrop-blur-sm sm:p-5"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSelectedTicket(null)
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ticket-detail-title"
+            className="my-auto w-full max-w-2xl overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl shadow-slate-950/25"
+          >
+            <header className="flex items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/80 px-5 py-5 sm:px-7">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-100 text-blue-700"><Ticket size={21} /></div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold uppercase tracking-wider text-blue-700">Chamado #{selectedTicket.number ?? String(selectedTicket.id).slice(0, 8)}</p>
+                  <h2 id="ticket-detail-title" className="mt-1 break-words text-lg font-bold text-slate-900">{selectedTicket.subject || 'Sem assunto'}</h2>
+                  <p className="mt-1 text-xs text-slate-500">Aberto em {formatDate(selectedTicket.created_at)}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedTicket(null)}
+                aria-label="Fechar detalhes do chamado"
+                className="shrink-0 rounded-xl p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+              ><X size={19} /></button>
+            </header>
+
+            <div className="max-h-[min(72vh,680px)] space-y-5 overflow-y-auto px-5 py-6 sm:px-7">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Status</p>
+                  <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selectedTicket.status)}`}>{statusLabel(selectedTicket.status)}</span>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Prioridade</p>
+                  <p className={`mt-2 text-sm font-bold ${priorityClass(selectedTicket.priority)}`}>{priorityLabel(selectedTicket.priority)}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Empresa</p>
+                  <p className="mt-2 truncate text-sm font-semibold text-slate-700">{company?.name || '—'}</p>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Descrição da solicitação</h3>
+                <div className="mt-2 min-h-24 whitespace-pre-wrap break-words rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm leading-7 text-slate-700">{selectedTicket.description || 'Nenhuma descrição informada.'}</div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-bold text-slate-900">Arquivos anexados</h3>
+                  <span className="text-xs text-slate-400">{selectedTicket.attachments?.length || 0} arquivo(s)</span>
+                </div>
+                {selectedTicket.attachments?.length ? (
+                  <div className="mt-3 space-y-2">
+                    {selectedTicket.attachments.map((attachment) => {
+                      const isImage = String(attachment.mime_type || '').startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'].includes(fileExtension(attachment.file_name))
+                      return (
+                        <div key={attachment.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">{isImage ? <ImageIcon size={19} /> : <FileText size={19} />}</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-slate-800">{attachment.file_name}</p>
+                            <p className="mt-0.5 text-xs text-slate-400">{formatFileSize(Number(attachment.file_size))}</p>
+                          </div>
+                          {attachment.signed_url ? (
+                            <a
+                              href={attachment.signed_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:border-blue-200 hover:bg-blue-50"
+                            >Abrir arquivo</a>
+                          ) : (
+                            <span className="shrink-0 text-xs text-slate-400">Indisponível</span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">Este chamado não possui arquivos anexados.</div>
+                )}
+              </div>
+
+              <p className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800">Esta tela permite consultar os dados e os arquivos enviados neste chamado. As atualizações de atendimento serão exibidas aqui quando estiverem disponíveis no portal.</p>
+            </div>
+
+            <footer className="flex justify-end border-t border-slate-100 bg-slate-50/70 px-5 py-4 sm:px-7">
+              <button type="button" onClick={() => setSelectedTicket(null)} className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700">Fechar</button>
+            </footer>
+          </section>
         </div>
       )}
     </div>
