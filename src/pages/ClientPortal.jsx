@@ -25,6 +25,11 @@ import {
   FileText,
   Image as ImageIcon,
   Trash2,
+  MessageSquare,
+  Send,
+  Loader2,
+  UserRound,
+  LockKeyhole,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
@@ -85,6 +90,10 @@ function isClosed(status) {
     value.includes('finalizado') ||
     value.includes('concluido')
   )
+}
+
+function isFinalizedTicket(status) {
+  return normalize(status) === 'closed' || normalize(status) === 'fechado'
 }
 
 function isInProgress(status) {
@@ -162,6 +171,14 @@ export default function ClientPortal() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [selectedTicket, setSelectedTicket] = useState(null)
+  const [conversationMessages, setConversationMessages] = useState([])
+  const [conversationLoading, setConversationLoading] = useState(false)
+  const [messageDraft, setMessageDraft] = useState('')
+  const [messageFiles, setMessageFiles] = useState([])
+  const [sendingMessage, setSendingMessage] = useState(false)
+  const [closingTicket, setClosingTicket] = useState(false)
+  const [conversationError, setConversationError] = useState('')
+  const [conversationNotice, setConversationNotice] = useState('')
 
   const loadPortal = useCallback(async () => {
     setLoading(true)
@@ -225,7 +242,7 @@ export default function ClientPortal() {
       if (ticketIds.length) {
         const { data: attachmentRows, error: attachmentError } = await supabase
           .from('ticket_attachments')
-          .select('id, ticket_id, file_name, storage_path, mime_type, file_size, created_at')
+          .select('id, ticket_id, message_id, file_name, storage_path, mime_type, file_size, created_at')
           .in('ticket_id', ticketIds)
           .order('created_at', { ascending: true })
 
@@ -253,7 +270,7 @@ export default function ClientPortal() {
 
       setTickets((ticketData || []).map((ticket) => ({
         ...ticket,
-        attachments: attachmentsByTicket[ticket.id] || [],
+        attachments: (attachmentsByTicket[ticket.id] || []).filter((attachment) => !attachment.message_id),
       })))
     } catch (err) {
       console.error('Erro ao carregar Portal do Cliente:', err)
@@ -340,7 +357,7 @@ export default function ClientPortal() {
     setError('')
   }
 
-  async function uploadTicketAttachments(ticket, filesToUpload, userId) {
+  async function uploadTicketAttachments(ticket, filesToUpload, userId, messageId = null) {
     if (!filesToUpload.length) return
 
     const uploadedPaths = []
@@ -369,6 +386,7 @@ export default function ClientPortal() {
           organization_id: currentCustomer.organization_id,
           client_company_id: currentCustomer.client_company_id,
           uploaded_by: userId,
+          ...(messageId ? { message_id: messageId } : {}),
           file_name: file.name,
           storage_path: storagePath,
           mime_type: mimeType,
@@ -458,6 +476,213 @@ export default function ClientPortal() {
       }
     } finally {
       setSaving(false)
+    }
+  }
+
+  const selectedTicketId = selectedTicket?.id || null
+
+  const loadConversation = useCallback(async (ticketId) => {
+    if (!ticketId) return
+    setConversationLoading(true)
+    setConversationError('')
+
+    try {
+      const { data: messageRows, error: messagesError } = await supabase
+        .from('ticket_messages')
+        .select('id, ticket_id, sender_id, sender_type, body, created_at')
+        .eq('ticket_id', ticketId)
+        .order('created_at', { ascending: true })
+
+      if (messagesError) throw messagesError
+
+      const { data: attachmentRows, error: attachmentError } = await supabase
+        .from('ticket_attachments')
+        .select('id, ticket_id, message_id, file_name, storage_path, mime_type, file_size, created_at')
+        .eq('ticket_id', ticketId)
+        .not('message_id', 'is', null)
+        .order('created_at', { ascending: true })
+
+      if (attachmentError) throw attachmentError
+
+      const attachmentsWithUrls = await Promise.all((attachmentRows || []).map(async (attachment) => {
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from(ATTACHMENTS_BUCKET)
+          .createSignedUrl(attachment.storage_path, 60 * 60)
+        if (signedError) console.warn('Não foi possível gerar link do anexo da mensagem:', signedError)
+        return { ...attachment, signed_url: signedData?.signedUrl || null }
+      }))
+
+      const byMessage = attachmentsWithUrls.reduce((acc, attachment) => {
+        if (!acc[attachment.message_id]) acc[attachment.message_id] = []
+        acc[attachment.message_id].push(attachment)
+        return acc
+      }, {})
+
+      setConversationMessages((messageRows || []).map((message) => ({
+        ...message,
+        attachments: byMessage[message.id] || [],
+      })))
+    } catch (err) {
+      console.error('Erro ao carregar conversa do chamado:', err)
+      setConversationError(errorMessage(err))
+    } finally {
+      setConversationLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedTicketId) {
+      setConversationMessages([])
+      setMessageDraft('')
+      setMessageFiles([])
+      setConversationError('')
+      setConversationNotice('')
+      return undefined
+    }
+
+    loadConversation(selectedTicketId)
+    const channel = supabase
+      .channel(`customer-ticket-messages-${selectedTicketId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'ticket_messages',
+        filter: `ticket_id=eq.${selectedTicketId}`,
+      }, () => loadConversation(selectedTicketId))
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'ticket_attachments',
+        filter: `ticket_id=eq.${selectedTicketId}`,
+      }, () => loadConversation(selectedTicketId))
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'tickets',
+        filter: `id=eq.${selectedTicketId}`,
+      }, (payload) => {
+        const updated = payload?.new
+        if (!updated?.id) return
+        setSelectedTicket((current) => current?.id === updated.id ? { ...current, status: updated.status, updated_at: updated.updated_at } : current)
+        setTickets((current) => current.map((ticket) => ticket.id === updated.id ? { ...ticket, status: updated.status, updated_at: updated.updated_at } : ticket))
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [selectedTicketId, loadConversation])
+
+  function handleMessageFileSelection(event) {
+    const incoming = Array.from(event.target.files || [])
+    event.target.value = ''
+    if (!incoming.length) return
+
+    const next = [...messageFiles]
+    for (const file of incoming) {
+      if (!MIME_BY_EXTENSION[fileExtension(file.name)]) {
+        setConversationError(`O arquivo "${file.name}" não possui um formato permitido.`)
+        return
+      }
+      if (file.size <= 0 || file.size > MAX_ATTACHMENT_SIZE) {
+        setConversationError(`O arquivo "${file.name}" deve ter entre 1 byte e 10 MB.`)
+        return
+      }
+      if (next.length >= MAX_ATTACHMENT_FILES) {
+        setConversationError(`Anexe no máximo ${MAX_ATTACHMENT_FILES} arquivos por mensagem.`)
+        return
+      }
+      if (!next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) next.push(file)
+    }
+    setMessageFiles(next)
+    setConversationError('')
+  }
+
+  async function handleSendMessage(event) {
+    event.preventDefault()
+    if (!selectedTicket || isFinalizedTicket(selectedTicket.status)) return
+    const body = messageDraft.trim()
+    if (!body && messageFiles.length === 0) {
+      setConversationError('Escreva uma mensagem ou selecione um arquivo para enviar.')
+      return
+    }
+
+    setSendingMessage(true)
+    setConversationError('')
+    setConversationNotice('')
+    let messageWasSent = false
+
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) throw authError
+      if (!authData.user) throw new Error('Sua sessão expirou. Entre novamente.')
+
+      const { data: newMessage, error: messageError } = await supabase
+        .from('ticket_messages')
+        .insert({
+          ticket_id: selectedTicket.id,
+          sender_id: authData.user.id,
+          sender_type: 'CUSTOMER',
+          body: body || 'Arquivo anexado.',
+        })
+        .select('id')
+        .single()
+
+      if (messageError) throw messageError
+      messageWasSent = true
+      setMessageDraft('')
+
+      if (messageFiles.length) {
+        await uploadTicketAttachments(selectedTicket, messageFiles, authData.user.id, newMessage.id)
+      }
+
+      setMessageFiles([])
+      setConversationNotice('Mensagem enviada para a equipe de atendimento.')
+      await loadConversation(selectedTicket.id)
+
+      const { data: latestTicket, error: latestTicketError } = await supabase
+        .from('tickets')
+        .select('id, status, updated_at')
+        .eq('id', selectedTicket.id)
+        .single()
+      if (!latestTicketError && latestTicket) {
+        setSelectedTicket((current) => current?.id === latestTicket.id ? { ...current, ...latestTicket } : current)
+        setTickets((current) => current.map((ticket) => ticket.id === latestTicket.id ? { ...ticket, ...latestTicket } : ticket))
+      }
+    } catch (err) {
+      console.error('Erro ao enviar mensagem do cliente:', err)
+      if (messageWasSent) {
+        setConversationError(`A mensagem foi enviada, mas ocorreu um problema ao enviar os anexos. ${errorMessage(err)}`)
+      } else {
+        setConversationError(errorMessage(err))
+      }
+    } finally {
+      setSendingMessage(false)
+    }
+  }
+
+  async function handleCustomerCloseTicket() {
+    if (!selectedTicket || isFinalizedTicket(selectedTicket.status)) return
+    const confirmed = window.confirm(`Deseja finalizar o chamado #${selectedTicket.number ?? selectedTicket.id}? Depois de finalizado, não será possível enviar novas mensagens.`)
+    if (!confirmed) return
+
+    setClosingTicket(true)
+    setConversationError('')
+    setConversationNotice('')
+    try {
+      const { error: closeError } = await supabase.rpc('customer_close_ticket', {
+        p_ticket_id: selectedTicket.id,
+      })
+      if (closeError) throw closeError
+
+      setSelectedTicket((current) => current ? { ...current, status: 'CLOSED' } : current)
+      setTickets((current) => current.map((ticket) => ticket.id === selectedTicket.id ? { ...ticket, status: 'CLOSED' } : ticket))
+      setConversationNotice('Chamado finalizado com sucesso.')
+    } catch (err) {
+      console.error('Erro ao finalizar chamado:', err)
+      setConversationError(errorMessage(err))
+    } finally {
+      setClosingTicket(false)
     }
   }
 
@@ -1009,10 +1234,79 @@ export default function ClientPortal() {
                 )}
               </div>
 
-              <p className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800">Esta tela permite consultar os dados e os arquivos enviados neste chamado. As atualizações de atendimento serão exibidas aqui quando estiverem disponíveis no portal.</p>
+              <div className="border-t border-slate-100 pt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900"><MessageSquare size={17} className="text-blue-600" /> Conversa do chamado</h3>
+                    <p className="mt-1 text-xs text-slate-500">Troque mensagens com a equipe responsável por esta solicitação.</p>
+                  </div>
+                  <button type="button" onClick={() => loadConversation(selectedTicket.id)} disabled={conversationLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">{conversationLoading ? 'Atualizando...' : 'Atualizar'}</button>
+                </div>
+
+                {conversationError && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{conversationError}</div>}
+                {conversationNotice && <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{conversationNotice}</div>}
+
+                <div className="mt-4 max-h-80 space-y-3 overflow-y-auto rounded-2xl bg-slate-50 p-3 sm:p-4">
+                  <div className="max-w-[92%] rounded-2xl rounded-tl-md border border-slate-200 bg-white p-3.5 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-700"><UserRound size={14} /> Você · Solicitação inicial</div>
+                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{selectedTicket.description || 'Nenhuma descrição informada.'}</p>
+                  </div>
+
+                  {conversationLoading && conversationMessages.length === 0 && <div className="py-5 text-center text-xs text-slate-400">Carregando conversa...</div>}
+                  {!conversationLoading && conversationMessages.length === 0 && <div className="py-3 text-center text-xs text-slate-400">Ainda não há respostas. A equipe receberá sua mensagem por aqui.</div>}
+                  {conversationMessages.map((message) => {
+                    const isCustomer = message.sender_type === 'CUSTOMER'
+                    return (
+                      <div key={message.id} className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[92%] rounded-2xl p-3.5 shadow-sm ${isCustomer ? 'rounded-tr-md bg-blue-600 text-white' : 'rounded-tl-md border border-slate-200 bg-white text-slate-800'}`}>
+                          <div className={`flex items-center gap-2 text-xs font-bold ${isCustomer ? 'text-blue-100' : 'text-slate-500'}`}>
+                            {isCustomer ? <UserRound size={14} /> : <Headphones size={14} />}
+                            {isCustomer ? 'Você' : 'Equipe de atendimento'}
+                            <span className={`font-normal ${isCustomer ? 'text-blue-100/80' : 'text-slate-400'}`}>· {formatDate(message.created_at)}</span>
+                          </div>
+                          <p className={`mt-2 whitespace-pre-wrap break-words text-sm leading-6 ${isCustomer ? 'text-white' : 'text-slate-700'}`}>{message.body}</p>
+                          {message.attachments?.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              {message.attachments.map((attachment) => (
+                                <div key={attachment.id} className={`flex items-center gap-2 rounded-xl p-2 ${isCustomer ? 'bg-blue-700/70' : 'bg-slate-50'}`}>
+                                  {String(attachment.mime_type || '').startsWith('image/') ? <ImageIcon size={16} /> : <FileText size={16} />}
+                                  <span className="min-w-0 flex-1 truncate text-xs">{attachment.file_name}</span>
+                                  {attachment.signed_url ? <a href={attachment.signed_url} target="_blank" rel="noreferrer" className={`text-xs font-bold underline ${isCustomer ? 'text-white' : 'text-blue-700'}`}>Abrir</a> : <span className="text-xs opacity-70">Indisponível</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {isFinalizedTicket(selectedTicket.status) ? (
+                  <div className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"><LockKeyhole size={17} className="mt-0.5 shrink-0" /> Este chamado foi finalizado. A conversa está disponível para consulta, mas não aceita novas mensagens.</div>
+                ) : (
+                  <form onSubmit={handleSendMessage} className="mt-4 space-y-3">
+                    <textarea value={messageDraft} onChange={(event) => setMessageDraft(event.target.value)} rows={3} maxLength={10000} placeholder="Escreva sua resposta para a equipe..." className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10" />
+                    {messageFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {messageFiles.map((file, index) => <span key={`${file.name}-${index}`} className="inline-flex max-w-full items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600"><Paperclip size={13} /><span className="max-w-44 truncate">{file.name}</span><button type="button" onClick={() => setMessageFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="font-bold text-red-500">×</button></span>)}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"><Paperclip size={15} /> Anexar arquivo<input type="file" multiple accept={ACCEPTED_ATTACHMENT_EXTENSIONS} onChange={handleMessageFileSelection} className="sr-only" disabled={sendingMessage} /></label>
+                      <button type="submit" disabled={sendingMessage || (!messageDraft.trim() && messageFiles.length === 0)} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{sendingMessage ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Enviar resposta</button>
+                    </div>
+                  </form>
+                )}
+              </div>
             </div>
 
-            <footer className="flex justify-end border-t border-slate-100 bg-slate-50/70 px-5 py-4 sm:px-7">
+            <footer className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-7">
+              <div>
+                {!isFinalizedTicket(selectedTicket.status) ? (
+                  <button type="button" onClick={handleCustomerCloseTicket} disabled={closingTicket} className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">{closingTicket ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} Finalizar chamado</button>
+                ) : <span className="text-xs font-semibold text-emerald-700">Chamado finalizado</span>}
+              </div>
               <button type="button" onClick={() => setSelectedTicket(null)} className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700">Fechar</button>
             </footer>
           </section>

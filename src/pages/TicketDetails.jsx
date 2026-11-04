@@ -1,681 +1,383 @@
-
-import { useCallback, useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
-  User,
   Building2,
-  Calendar,
-  Clock,
-  Send,
-  RefreshCw,
-  UserCheck,
+  CalendarDays,
+  CheckCircle2,
+  Clock3,
+  FileText,
+  Image as ImageIcon,
+  Loader2,
+  LockKeyhole,
   MessageSquare,
-  CheckCircle,
-  AlertCircle,
+  Paperclip,
+  RefreshCw,
+  Send,
+  Ticket,
+  UserRound,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
+const BUCKET = 'ticket-attachments'
+const MAX_FILES = 5
+const MAX_FILE_SIZE = 10 * 1024 * 1024
+const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.ppt,.pptx,.odt,.ods'
+const MIME = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+  heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf', doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv', txt: 'text/plain', ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet',
+}
 const STATUS_OPTIONS = [
   { value: 'OPEN', label: 'Aberto' },
-  { value: 'IN_PROGRESS', label: 'Em andamento' },
+  { value: 'IN_PROGRESS', label: 'Em atendimento' },
   { value: 'WAITING_CUSTOMER', label: 'Aguardando cliente' },
   { value: 'RESOLVED', label: 'Resolvido' },
   { value: 'CLOSED', label: 'Fechado' },
 ]
 
-function formatStatus(status) {
-  return STATUS_OPTIONS.find(item => item.value === status)?.label || status
+function ext(name) { return String(name || '').split('.').pop()?.toLowerCase() || '' }
+function safeName(name) {
+  return String(name || 'arquivo').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 120) || 'arquivo'
 }
-
-function formatPriority(priority) {
-  const values = {
-    LOW: 'Baixa',
-    NORMAL: 'Normal',
-    HIGH: 'Alta',
-    URGENT: 'Urgente',
-  }
-
-  return values[priority] || priority || 'Não informada'
+function fileSize(bytes) {
+  const value = Number(bytes)
+  if (!Number.isFinite(value)) return ''
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
-
-function formatDate(date) {
-  if (!date) return '-'
-
-  return new Date(date).toLocaleString('pt-BR', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  })
+function dateTime(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 }
-
-function statusStyle(status) {
-  const styles = {
-    OPEN: 'bg-amber-100 text-amber-700',
-    IN_PROGRESS: 'bg-blue-100 text-blue-700',
-    WAITING_CUSTOMER: 'bg-purple-100 text-purple-700',
-    RESOLVED: 'bg-green-100 text-green-700',
-    CLOSED: 'bg-slate-200 text-slate-700',
-  }
-
-  return styles[status] || 'bg-slate-100 text-slate-600'
+function statusLabel(value) {
+  return STATUS_OPTIONS.find((item) => item.value === value)?.label || value || 'Aberto'
+}
+function priorityLabel(value) {
+  return ({ LOW: 'Baixa', NORMAL: 'Normal', HIGH: 'Alta', URGENT: 'Urgente' })[value] || value || 'Normal'
+}
+function errorText(error) {
+  if (!error) return 'Ocorreu um erro inesperado.'
+  if (error.code === '42501') return 'A operação foi bloqueada pelas políticas de acesso (RLS). Confira o SQL da conversa e as permissões da equipe.'
+  if (error.code === '42P01') return 'A tabela de mensagens ainda não existe. Execute ticket_conversation.sql no Supabase.'
+  return error.message || 'Não foi possível concluir a operação.'
 }
 
 export default function TicketDetails() {
   const { id } = useParams()
-  const navigate = useNavigate()
-
   const [ticket, setTicket] = useState(null)
-  const [messages, setMessages] = useState([])
-  const [currentUser, setCurrentUser] = useState(null)
-  const [role, setRole] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [claiming, setClaiming] = useState(false)
-  const [sending, setSending] = useState(false)
-  const [updatingStatus, setUpdatingStatus] = useState(false)
-
-  const [message, setMessage] = useState('')
   const [customer, setCustomer] = useState(null)
   const [company, setCompany] = useState(null)
-  const [department, setDepartment] = useState(null)
-  const [assignee, setAssignee] = useState(null)
-
+  const [messages, setMessages] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [changingStatus, setChangingStatus] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [files, setFiles] = useState([])
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [notice, setNotice] = useState('')
 
-  const loadTicket = useCallback(async () => {
-    setLoading(true)
+  const loadTicket = useCallback(async (showLoader = true) => {
+    if (!id) return
+    if (showLoader) setLoading(true)
+    else setRefreshing(true)
     setError('')
 
     try {
-      const { data: authData, error: authError } =
-        await supabase.auth.getUser()
-
-      if (authError || !authData.user) {
-        throw new Error('Sua sessão expirou. Entre novamente.')
-      }
-
-      const user = authData.user
-      setCurrentUser(user)
-
-      const { data: membership, error: membershipError } =
-        await supabase
-          .from('memberships')
-          .select('organization_id, role')
-          .eq('user_id', user.id)
-          .limit(1)
-          .maybeSingle()
-
-      if (membershipError || !membership) {
-        throw new Error('Não foi possível localizar sua organização.')
-      }
-
-      setRole(membership.role)
-
-      const { data: ticketData, error: ticketError } =
-        await supabase
-          .from('tickets')
-          .select(`
-            id,
-            organization_id,
-            client_company_id,
-            customer_id,
-            number,
-            subject,
-            description,
-            status,
-            priority,
-            department_id,
-            assigned_to,
-            created_by,
-            created_at,
-            updated_at
-          `)
-          .eq('id', id)
-          .eq('organization_id', membership.organization_id)
-          .single()
-
+      const { data: ticketData, error: ticketError } = await supabase
+        .from('tickets')
+        .select('id, number, subject, description, status, priority, customer_id, client_company_id, organization_id, created_at, updated_at')
+        .eq('id', id)
+        .single()
       if (ticketError) throw ticketError
-
       setTicket(ticketData)
 
-      const [
-        customerResult,
-        companyResult,
-        departmentResult,
-        messagesResult,
-      ] = await Promise.all([
-        supabase
-          .from('customers')
-          .select('id, name, email, phone')
-          .eq('id', ticketData.customer_id)
-          .maybeSingle(),
-
-        supabase
-          .from('client_companies')
-          .select('id, name, email, phone')
-          .eq('id', ticketData.client_company_id)
-          .maybeSingle(),
-
-        ticketData.department_id
-          ? supabase
-              .from('departments')
-              .select('id, name')
-              .eq('id', ticketData.department_id)
-              .maybeSingle()
-          : Promise.resolve({ data: null, error: null }),
-
-        supabase
-          .from('ticket_messages')
-          .select(`
-            id,
-            sender_id,
-            sender_type,
-            message,
-            created_at
-          `)
-          .eq('ticket_id', id)
-          .eq('organization_id', membership.organization_id)
-          .order('created_at', { ascending: true }),
+      const [customerResult, companyResult, messagesResult, attachmentsResult] = await Promise.all([
+        supabase.from('customers').select('id, name, email').eq('id', ticketData.customer_id).maybeSingle(),
+        supabase.from('client_companies').select('id, name').eq('id', ticketData.client_company_id).maybeSingle(),
+        supabase.from('ticket_messages').select('id, ticket_id, sender_id, sender_type, body, created_at').eq('ticket_id', id).order('created_at', { ascending: true }),
+        supabase.from('ticket_attachments').select('id, ticket_id, message_id, file_name, storage_path, mime_type, file_size, created_at').eq('ticket_id', id).order('created_at', { ascending: true }),
       ])
-
-      if (customerResult.error) throw customerResult.error
-      if (companyResult.error) throw companyResult.error
-      if (departmentResult.error) throw departmentResult.error
+      if (customerResult.error) console.warn('Não foi possível carregar o contato do cliente:', customerResult.error)
+      if (companyResult.error) console.warn('Não foi possível carregar a empresa cliente:', companyResult.error)
       if (messagesResult.error) throw messagesResult.error
+      if (attachmentsResult.error) throw attachmentsResult.error
+      setCustomer(customerResult.data || null)
+      setCompany(companyResult.data || null)
 
-      setCustomer(customerResult.data)
-      setCompany(companyResult.data)
-      setDepartment(departmentResult.data)
-      setMessages(messagesResult.data || [])
-
-      if (ticketData.assigned_to) {
-        const { data: profile, error: profileError } =
-          await supabase
-            .from('profiles')
-            .select('id, full_name, email')
-            .eq('id', ticketData.assigned_to)
-            .maybeSingle()
-
-        if (profileError) throw profileError
-        setAssignee(profile)
-      } else {
-        setAssignee(null)
-      }
+      const withUrls = await Promise.all((attachmentsResult.data || []).map(async (attachment) => {
+        const { data: signed, error: signedError } = await supabase.storage.from(BUCKET).createSignedUrl(attachment.storage_path, 3600)
+        if (signedError) console.warn('Não foi possível criar link de anexo:', signedError)
+        return { ...attachment, signed_url: signed?.signedUrl || null }
+      }))
+      const attachmentsByMessage = withUrls.reduce((acc, file) => {
+        if (file.message_id) {
+          if (!acc[file.message_id]) acc[file.message_id] = []
+          acc[file.message_id].push(file)
+        }
+        return acc
+      }, {})
+      setMessages((messagesResult.data || []).map((message) => ({
+        ...message,
+        attachments: attachmentsByMessage[message.id] || [],
+      })))
+      setTicket((current) => ({ ...ticketData, attachments: withUrls.filter((file) => !file.message_id) }))
     } catch (err) {
       console.error('Erro ao carregar chamado:', err)
-      setError(err.message || 'Não foi possível carregar o chamado.')
+      setError(errorText(err))
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [id])
 
   useEffect(() => {
-    loadTicket()
+    loadTicket(true)
   }, [loadTicket])
 
-  async function handleClaim() {
-    if (!ticket || claiming) return
+  useEffect(() => {
+    if (!id) return undefined
+    const channel = supabase
+      .channel(`staff-ticket-conversation-${id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ticket_messages', filter: `ticket_id=eq.${id}` }, () => loadTicket(false))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticket_attachments', filter: `ticket_id=eq.${id}` }, () => loadTicket(false))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tickets', filter: `id=eq.${id}` }, () => loadTicket(false))
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [id, loadTicket])
 
-    setClaiming(true)
-    setError('')
-    setSuccess('')
+  const ticketNumber = useMemo(() => ticket?.number ?? String(ticket?.id || '').slice(0, 8), [ticket])
+  const isFinalized = ticket?.status === 'CLOSED'
 
-    try {
-      const { data, error: claimError } = await supabase.rpc(
-        'claim_ticket',
-        { p_ticket_id: ticket.id }
-      )
-
-      if (claimError) throw claimError
-
-      if (!data) {
-        throw new Error(
-          'Este chamado já foi assumido ou não está disponível.'
-        )
+  function selectFiles(event) {
+    const incoming = Array.from(event.target.files || [])
+    event.target.value = ''
+    if (!incoming.length) return
+    const next = [...files]
+    for (const file of incoming) {
+      if (!MIME[ext(file.name)]) {
+        setError(`Formato não permitido para ${file.name}.`)
+        return
       }
-
-      setSuccess('Chamado assumido com sucesso!')
-      await loadTicket()
-    } catch (err) {
-      setError(err.message || 'Não foi possível assumir o chamado.')
-    } finally {
-      setClaiming(false)
+      if (!file.size || file.size > MAX_FILE_SIZE) {
+        setError(`O arquivo ${file.name} deve ter até 10 MB.`)
+        return
+      }
+      if (next.length >= MAX_FILES) {
+        setError(`Você pode anexar até ${MAX_FILES} arquivos por resposta.`)
+        return
+      }
+      if (!next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) next.push(file)
     }
+    setFiles(next)
+    setError('')
   }
 
-  async function handleSendMessage(event) {
-    event.preventDefault()
-
-    const content = message.trim()
-
-    if (!content || sending || !ticket || !currentUser) return
-
-    setSending(true)
-    setError('')
-    setSuccess('')
-
+  async function uploadMessageFiles(messageId, userId) {
+    if (!files.length) return
+    const uploaded = []
     try {
-      const { error: insertError } = await supabase
-        .from('ticket_messages')
-        .insert({
+      const metadata = []
+      for (const file of files) {
+        const unique = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        const path = `${ticket.organization_id}/${ticket.client_company_id}/${ticket.id}/${unique}-${safeName(file.name)}`
+        const contentType = MIME[ext(file.name)] || file.type || 'application/octet-stream'
+        const { error: uploadError } = await supabase.storage.from(BUCKET).upload(path, file, { cacheControl: '3600', contentType, upsert: false })
+        if (uploadError) throw uploadError
+        uploaded.push(path)
+        metadata.push({
           ticket_id: ticket.id,
           organization_id: ticket.organization_id,
           client_company_id: ticket.client_company_id,
-          sender_id: currentUser.id,
-          sender_type: 'STAFF',
-          message: content,
+          uploaded_by: userId,
+          message_id: messageId,
+          file_name: file.name,
+          storage_path: path,
+          mime_type: contentType,
+          file_size: file.size,
         })
+      }
+      const { error: metadataError } = await supabase.from('ticket_attachments').insert(metadata)
+      if (metadataError) throw metadataError
+    } catch (uploadError) {
+      if (uploaded.length) await supabase.storage.from(BUCKET).remove(uploaded)
+      throw uploadError
+    }
+  }
 
+  async function sendReply(event) {
+    event.preventDefault()
+    if (!ticket || isFinalized) return
+    const body = draft.trim()
+    if (!body && files.length === 0) {
+      setError('Escreva uma resposta ou selecione um arquivo.')
+      return
+    }
+    setSending(true)
+    setError('')
+    setNotice('')
+    let sent = false
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) throw authError
+      if (!authData.user) throw new Error('Sua sessão expirou. Entre novamente.')
+      const { data: newMessage, error: insertError } = await supabase
+        .from('ticket_messages')
+        .insert({ ticket_id: ticket.id, sender_id: authData.user.id, sender_type: 'STAFF', body: body || 'Arquivo anexado.' })
+        .select('id')
+        .single()
       if (insertError) throw insertError
-
-      setMessage('')
-      await loadTicket()
+      sent = true
+      setDraft('')
+      if (files.length) await uploadMessageFiles(newMessage.id, authData.user.id)
+      setFiles([])
+      setNotice('Resposta enviada ao cliente. O chamado agora está aguardando o retorno dele.')
+      await loadTicket(false)
     } catch (err) {
-      setError(err.message || 'Não foi possível enviar a mensagem.')
+      console.error('Erro ao responder chamado:', err)
+      setError(sent ? `A resposta foi enviada, mas houve um problema com os anexos. ${errorText(err)}` : errorText(err))
     } finally {
       setSending(false)
     }
   }
 
-  async function handleStatusChange(newStatus) {
-    if (!ticket || updatingStatus) return
-
-    setUpdatingStatus(true)
+  async function updateStatus(nextStatus) {
+    if (!ticket || nextStatus === ticket.status) return
+    setChangingStatus(true)
     setError('')
-    setSuccess('')
-
+    setNotice('')
     try {
-      const { error: updateError } = await supabase
+      const { data: updated, error: updateError } = await supabase
         .from('tickets')
-        .update({ status: newStatus })
+        .update({ status: nextStatus })
         .eq('id', ticket.id)
-        .eq('organization_id', ticket.organization_id)
-
+        .select('id, status, updated_at')
+        .single()
       if (updateError) throw updateError
-
-      setSuccess('Status atualizado com sucesso.')
-      await loadTicket()
+      setTicket((current) => ({ ...current, ...updated }))
+      setNotice(`Status alterado para "${statusLabel(nextStatus)}".`)
     } catch (err) {
-      setError(err.message || 'Não foi possível atualizar o status.')
+      console.error('Erro ao alterar status:', err)
+      setError(errorText(err))
     } finally {
-      setUpdatingStatus(false)
+      setChangingStatus(false)
     }
   }
 
-  const isManager = ['OWNER', 'ADMIN'].includes(role)
-  const isAgent = role === 'AGENT'
-  const isAssignedToMe = ticket?.assigned_to === currentUser?.id
-  const isFinished = ['RESOLVED', 'CLOSED'].includes(ticket?.status)
-
-  const canWork = isManager || (isAgent && isAssignedToMe)
-
   if (loading) {
-    return (
-      <div className="flex min-h-96 items-center justify-center">
-        <RefreshCw className="mr-2 animate-spin" size={20} />
-        Carregando chamado...
-      </div>
-    )
+    return <div className="flex min-h-[60vh] items-center justify-center gap-3 text-sm text-slate-500"><Loader2 className="animate-spin" size={19} /> Carregando chamado...</div>
   }
 
   if (!ticket) {
     return (
-      <div className="p-8">
-        <button
-          onClick={() => navigate('/chamados')}
-          className="mb-5 flex items-center gap-2 text-sm text-blue-600"
-        >
-          <ArrowLeft size={17} />
-          Voltar aos chamados
-        </button>
-
-        <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-700">
-          {error || 'Chamado não encontrado ou sem permissão de acesso.'}
-        </div>
+      <div className="mx-auto max-w-3xl p-6">
+        {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
+        <Link to="/chamados" className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700"><ArrowLeft size={16} /> Voltar aos chamados</Link>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 lg:p-8">
-
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <button
-          onClick={() => navigate('/chamados')}
-          className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-blue-600"
-        >
-          <ArrowLeft size={18} />
-          Voltar aos chamados
-        </button>
-
-        <button
-          onClick={loadTicket}
-          disabled={loading}
-          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
-        >
-          <RefreshCw size={16} />
-          Atualizar
-        </button>
+    <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Link to="/chamados" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-blue-700"><ArrowLeft size={17} /> Voltar aos chamados</Link>
+        <button type="button" onClick={() => loadTicket(false)} disabled={refreshing} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"><RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> Atualizar</button>
       </div>
 
-      <div className="mb-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-xl font-bold text-slate-900">
-            Chamado #{ticket.number}
-          </h1>
-
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyle(ticket.status)}`}>
-            {formatStatus(ticket.status)}
-          </span>
-        </div>
-
-        <h2 className="mt-2 text-lg text-slate-700">
-          {ticket.subject}
-        </h2>
-
-        <p className="mt-1 text-sm text-slate-500">
-          Criado em {formatDate(ticket.created_at)}
-        </p>
-      </div>
-
-      {error && (
-        <div className="mb-5 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          <AlertCircle size={18} />
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-5 rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-700">
-          {success}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_350px]">
-
-        <section className="space-y-6">
-
-          <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <MessageSquare size={19} className="text-blue-600" />
-              <h3 className="font-semibold text-slate-800">
-                Descrição do chamado
-              </h3>
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-4 border-b border-slate-100 bg-slate-50/80 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-6">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Ticket size={21} /></div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-blue-700">Chamado #{ticketNumber}</p>
+              <h1 className="mt-1 break-words text-xl font-bold text-slate-900">{ticket.subject || 'Sem assunto'}</h1>
+              <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500"><CalendarDays size={13} /> Aberto em {dateTime(ticket.created_at)}</p>
             </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="ticket-status" className="sr-only">Status do chamado</label>
+            <select id="ticket-status" value={ticket.status} onChange={(event) => updateStatus(event.target.value)} disabled={changingStatus} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:opacity-50">
+              {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            {changingStatus && <Loader2 size={16} className="animate-spin text-blue-600" />}
+          </div>
+        </div>
 
-            <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
-              {ticket.description || 'Nenhuma descrição informada.'}
+        <div className="grid gap-3 p-5 sm:grid-cols-3 sm:p-6">
+          <div className="rounded-xl border border-slate-200 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cliente</p><p className="mt-1 truncate text-sm font-semibold text-slate-800">{customer?.name || 'Cliente'}</p><p className="truncate text-xs text-slate-500">{customer?.email || ''}</p></div>
+          <div className="rounded-xl border border-slate-200 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Empresa cliente</p><p className="mt-1 flex items-center gap-2 truncate text-sm font-semibold text-slate-800"><Building2 size={15} className="text-slate-400" /> {company?.name || '—'}</p></div>
+          <div className="rounded-xl border border-slate-200 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Prioridade</p><p className="mt-1 text-sm font-semibold text-slate-800">{priorityLabel(ticket.priority)}</p></div>
+        </div>
+      </section>
+
+      {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+      {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
+
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
+          <h2 className="flex items-center gap-2 font-bold text-slate-900"><MessageSquare size={18} className="text-blue-600" /> Conversa do chamado</h2>
+          <p className="mt-1 text-xs text-slate-500">Responda ao cliente e acompanhe todas as devolutivas nesta linha do tempo.</p>
+        </div>
+        <div className="space-y-4 p-4 sm:p-6">
+          <div className="flex justify-start">
+            <div className="max-w-[95%] rounded-2xl rounded-tl-md border border-slate-200 bg-slate-50 p-4 sm:max-w-[85%]">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-600"><UserRound size={14} /> {customer?.name || 'Cliente'} · Solicitação inicial</div>
+              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{ticket.description || 'Nenhuma descrição informada.'}</p>
+              {ticket.attachments?.length > 0 && <div className="mt-3 space-y-2">{ticket.attachments.map((file) => <Attachment key={file.id} file={file} />)}</div>}
             </div>
           </div>
 
-          {!ticket.assigned_to && !isFinished && isAgent && (
-            <div className="rounded-xl border border-blue-200 bg-blue-50 p-5">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="font-semibold text-blue-900">
-                    Este chamado está disponível
-                  </h3>
-
-                  <p className="mt-1 text-sm text-blue-700">
-                    Assuma o atendimento para começar a responder ao cliente.
-                  </p>
-                </div>
-
-                <button
-                  onClick={handleClaim}
-                  disabled={claiming}
-                  className="flex shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-                >
-                  <UserCheck size={18} />
-                  {claiming ? 'Assumindo...' : 'Assumir chamado'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {ticket.assigned_to && (
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-400">
-                    Responsável pelo atendimento
-                  </p>
-
-                  <p className="mt-1 font-semibold text-slate-800">
-                    {assignee?.full_name || 'Atendente'}
-                  </p>
-
-                  {assignee?.email && (
-                    <p className="text-sm text-slate-500">
-                      {assignee.email}
-                    </p>
-                  )}
-                </div>
-
-                {isAssignedToMe && (
-                  <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                    Você é o responsável
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-
-            <div className="border-b border-slate-100 p-5">
-              <h3 className="font-semibold text-slate-800">
-                Conversa do chamado
-              </h3>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Histórico de mensagens entre cliente e atendimento.
-              </p>
-            </div>
-
-            <div className="max-h-[650px] min-h-40 space-y-5 overflow-y-auto p-5">
-              {messages.length === 0 ? (
-                <div className="py-10 text-center">
-                  <MessageSquare className="mx-auto mb-3 text-slate-300" size={32} />
-                  <p className="text-sm text-slate-500">
-                    Nenhuma mensagem neste chamado ainda.
-                  </p>
-                </div>
-              ) : (
-                messages.map(item => {
-                  const isStaff = item.sender_type === 'STAFF'
-                  const isMe = item.sender_id === currentUser?.id
-
-                  return (
-                    <div
-                      key={item.id}
-                      className={`flex ${isStaff ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div
-                        className={`max-w-[90%] rounded-xl p-4 sm:max-w-[80%] ${
-                          isStaff
-                            ? 'bg-blue-50 text-blue-950'
-                            : 'bg-slate-100 text-slate-800'
-                        }`}
-                      >
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-semibold">
-                            {isStaff ? (isMe ? 'Você' : 'Atendimento') : (customer?.name || 'Cliente')}
-                          </span>
-
-                          <span className="text-xs text-slate-400">
-                            {formatDate(item.created_at)}
-                          </span>
-                        </div>
-
-                        <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                          {item.message}
-                        </p>
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-
-            <div className="border-t border-slate-100 p-5">
-
-              {canWork && !isFinished ? (
-                <form onSubmit={handleSendMessage}>
-                  <textarea
-                    value={message}
-                    onChange={event => setMessage(event.target.value)}
-                    rows={4}
-                    maxLength={10000}
-                    placeholder="Escreva sua resposta ao cliente..."
-                    className="w-full resize-y rounded-lg border border-slate-200 p-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-
-                  <div className="mt-3 flex items-center justify-between gap-3">
-                    <span className="text-xs text-slate-400">
-                      {message.length}/10000 caracteres
-                    </span>
-
-                    <button
-                      type="submit"
-                      disabled={sending || !message.trim()}
-                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Send size={16} />
-                      {sending ? 'Enviando...' : 'Enviar resposta'}
-                    </button>
+          {messages.map((message) => {
+            const fromStaff = message.sender_type === 'STAFF'
+            return (
+              <div key={message.id} className={`flex ${fromStaff ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[95%] rounded-2xl p-4 sm:max-w-[85%] ${fromStaff ? 'rounded-tr-md bg-blue-600 text-white' : 'rounded-tl-md border border-slate-200 bg-white text-slate-800'}`}>
+                  <div className={`flex flex-wrap items-center gap-2 text-xs font-bold ${fromStaff ? 'text-blue-100' : 'text-slate-500'}`}>
+                    {fromStaff ? 'Equipe de atendimento' : (customer?.name || 'Cliente')} <span className="font-normal opacity-75">· {dateTime(message.created_at)}</span>
                   </div>
-                </form>
-              ) : isFinished ? (
-                <p className="text-center text-sm text-slate-500">
-                  Este chamado está finalizado. Não é possível enviar novas respostas.
-                </p>
-              ) : (
-                <p className="text-center text-sm text-slate-500">
-                  {ticket.assigned_to
-                    ? 'Este chamado está atribuído a outro atendente. Você não pode responder.'
-                    : 'Assuma este chamado para poder responder ao cliente.'}
-                </p>
-              )}
+                  <p className={`mt-2 whitespace-pre-wrap break-words text-sm leading-6 ${fromStaff ? 'text-white' : 'text-slate-700'}`}>{message.body}</p>
+                  {message.attachments?.length > 0 && <div className="mt-3 space-y-2">{message.attachments.map((file) => <Attachment key={file.id} file={file} inverse={fromStaff} />)}</div>}
+                </div>
+              </div>
+            )
+          })}
 
+          {messages.length === 0 && <p className="py-3 text-center text-xs text-slate-400">Nenhuma resposta enviada. Esta é a primeira mensagem do chamado.</p>}
+        </div>
+
+        {isFinalized ? (
+          <div className="flex items-start gap-2 border-t border-slate-100 bg-slate-50 px-5 py-4 text-sm text-slate-600"><LockKeyhole size={17} className="mt-0.5 shrink-0" /> Este chamado está fechado. Altere o status para reabrir e permitir novas mensagens.</div>
+        ) : (
+          <form onSubmit={sendReply} className="space-y-3 border-t border-slate-100 bg-slate-50/70 p-4 sm:p-6">
+            <label htmlFor="staff-ticket-reply" className="block text-sm font-semibold text-slate-700">Sua resposta ao cliente</label>
+            <textarea id="staff-ticket-reply" value={draft} onChange={(event) => setDraft(event.target.value)} rows={4} maxLength={10000} placeholder="Digite uma orientação, atualização ou pergunta para o cliente..." className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10" />
+            {files.length > 0 && <div className="flex flex-wrap gap-2">{files.map((file, index) => <span key={`${file.name}-${index}`} className="inline-flex max-w-full items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs text-slate-600"><Paperclip size={13} /><span className="max-w-48 truncate">{file.name}</span><button type="button" onClick={() => setFiles((current) => current.filter((_, i) => i !== index))} className="font-bold text-red-500">×</button></span>)}</div>}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"><Paperclip size={15} /> Anexar arquivos<input type="file" multiple accept={ACCEPT} onChange={selectFiles} className="sr-only" disabled={sending} /></label>
+              <button type="submit" disabled={sending || (!draft.trim() && files.length === 0)} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Enviar resposta</button>
             </div>
-          </div>
-        </section>
+          </form>
+        )}
+      </section>
+    </div>
+  )
+}
 
-        <aside className="space-y-5">
-
-          <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <div className="mb-4 flex items-center gap-2 border-b border-slate-100 pb-3">
-              <Building2 size={18} className="text-blue-600" />
-              <h3 className="font-semibold text-slate-800">
-                Informações do cliente
-              </h3>
-            </div>
-
-            <div className="space-y-4 text-sm">
-              <div>
-                <p className="text-xs text-slate-400">Contato</p>
-                <p className="mt-1 font-medium text-slate-800">
-                  {customer?.name || 'Não informado'}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-400">Empresa</p>
-                <p className="mt-1 font-medium text-slate-800">
-                  {company?.name || 'Não informada'}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-400">E-mail</p>
-                <p className="mt-1 break-all text-slate-700">
-                  {customer?.email || company?.email || '-'}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-400">Telefone</p>
-                <p className="mt-1 text-slate-700">
-                  {customer?.phone || company?.phone || '-'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <h3 className="mb-4 border-b border-slate-100 pb-3 font-semibold text-slate-800">
-              Informações do chamado
-            </h3>
-
-            <div className="space-y-4 text-sm">
-              <div>
-                <p className="text-xs text-slate-400">Departamento</p>
-                <p className="mt-1 font-medium text-slate-800">
-                  {department?.name || 'Não informado'}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-400">Prioridade</p>
-                <p className="mt-1 font-medium text-slate-800">
-                  {formatPriority(ticket.priority)}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-400">Status</p>
-
-                {canWork ? (
-                  <select
-                    value={ticket.status}
-                    disabled={updatingStatus}
-                    onChange={event => handleStatusChange(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
-                  >
-                    {STATUS_OPTIONS.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <p className="mt-1 font-medium text-slate-800">
-                    {formatStatus(ticket.status)}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-400">Data de abertura</p>
-                <p className="mt-1 flex items-center gap-2 text-slate-700">
-                  <Calendar size={15} />
-                  {formatDate(ticket.created_at)}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-400">Última atualização</p>
-                <p className="mt-1 flex items-center gap-2 text-slate-700">
-                  <Clock size={15} />
-                  {formatDate(ticket.updated_at)}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {isFinished && (
-            <div className="flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-green-800">
-              <CheckCircle size={22} />
-              <div>
-                <p className="font-semibold">Chamado finalizado</p>
-                <p className="text-xs">Este atendimento foi encerrado.</p>
-              </div>
-            </div>
-          )}
-
-        </aside>
-      </div>
+function Attachment({ file, inverse = false }) {
+  const isImage = String(file.mime_type || '').startsWith('image/')
+  return (
+    <div className={`flex items-center gap-3 rounded-xl p-2.5 ${inverse ? 'bg-blue-700/70' : 'border border-slate-200 bg-white'}`}>
+      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${inverse ? 'bg-blue-800 text-white' : 'bg-blue-50 text-blue-700'}`}>{isImage ? <ImageIcon size={17} /> : <FileText size={17} />}</div>
+      <div className="min-w-0 flex-1"><p className={`truncate text-xs font-semibold ${inverse ? 'text-white' : 'text-slate-700'}`}>{file.file_name}</p><p className={`text-[11px] ${inverse ? 'text-blue-100' : 'text-slate-400'}`}>{fileSize(file.file_size)}</p></div>
+      {file.signed_url ? <a href={file.signed_url} target="_blank" rel="noreferrer" className={`shrink-0 text-xs font-bold underline ${inverse ? 'text-white' : 'text-blue-700'}`}>Abrir</a> : <span className="text-xs opacity-60">Indisponível</span>}
     </div>
   )
 }
