@@ -1,38 +1,37 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Ticket,
-  Plus,
-  RefreshCw,
-  LogOut,
-  Clock3,
-  CheckCircle2,
-  AlertCircle,
-  X,
-  Search,
-  Filter,
-  Building2,
-  CalendarDays,
-  ChevronRight,
-  Headphones,
-  LayoutDashboard,
-  LifeBuoy,
-  ShieldCheck,
-  Sparkles,
-  ArrowUpRight,
-  CircleHelp,
-  Paperclip,
-  UploadCloud,
-  FileText,
-  Image as ImageIcon,
-  Trash2,
-  MessageSquare,
-  Send,
-  Loader2,
-  UserRound,
-  LockKeyhole,
+  AlertCircle, Building2, CalendarDays, CheckCircle2, Clock3, FileText,
+  Headphones, Image as ImageIcon, Loader2, LogOut, MessageSquare, Paperclip,
+  Plus, RefreshCw, Search, Send, ShieldCheck, Ticket, Trash2, UploadCloud, X,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+
+const BUCKET = 'ticket-attachments'
+const MAX_FILES = 5
+const MAX_SIZE = 10 * 1024 * 1024
+const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.ppt,.pptx,.odt,.ods'
+
+const MIME = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv',
+  txt: 'text/plain',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+}
 
 const initialForm = {
   subject: '',
@@ -40,140 +39,130 @@ const initialForm = {
   priority: 'NORMAL',
 }
 
-const ATTACHMENTS_BUCKET = 'ticket-attachments'
-const MAX_ATTACHMENT_FILES = 5
-const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
-const ACCEPTED_ATTACHMENT_EXTENSIONS = '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.ppt,.pptx,.odt,.ods'
-const MIME_BY_EXTENSION = {
-  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
-  heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf', doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  csv: 'text/csv', txt: 'text/plain', ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet',
-}
-
-function fileExtension(name) {
+function extension(name) {
   return String(name || '').split('.').pop()?.toLowerCase() || ''
 }
 
-function attachmentMimeType(file) {
-  const extension = fileExtension(file.name)
-  return MIME_BY_EXTENSION[extension] || file.type || 'application/octet-stream'
+function safeName(name) {
+  return String(name || 'arquivo')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120) || 'arquivo'
 }
 
-function formatFileSize(bytes) {
+function dateTime(value) {
+  if (!value) return '—'
+
+  const date = new Date(value)
+
+  return Number.isNaN(date.getTime())
+    ? '—'
+    : date.toLocaleString('pt-BR', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      })
+}
+
+function fileSize(value) {
+  const bytes = Number(value)
+
   if (!Number.isFinite(bytes)) return ''
   if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function safeStorageFileName(name) {
-  return String(name || 'arquivo').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 120) || 'arquivo'
-}
-
-function normalize(value) {
-  return String(value || '').trim().toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ')
-}
-
-function isClosed(status) {
-  const value = normalize(status)
-  return (
-    value.includes('fechado') ||
-    value.includes('resolvido') ||
-    value.includes('closed') ||
-    value.includes('resolved') ||
-    value.includes('finalizado') ||
-    value.includes('concluido')
-  )
-}
-
-function isFinalizedTicket(status) {
-  return normalize(status) === 'closed' || normalize(status) === 'fechado'
-}
-
-function isInProgress(status) {
-  const value = normalize(status)
-  return value.includes('andamento') || value.includes('progress') || value.includes('atendimento')
-}
-
 function statusLabel(status) {
-  const value = normalize(status)
-  if (value === 'closed' || value.includes('fechado')) return 'Fechado'
-  if (value === 'resolved' || value.includes('resolvido') || value.includes('finalizado') || value.includes('concluido')) return 'Resolvido'
-  if (value === 'waiting customer' || value.includes('aguardando cliente') || value.includes('pendente')) return 'Aguardando cliente'
-  if (isInProgress(value)) return 'Em atendimento'
-  if (value === 'open' || value.includes('aberto')) return 'Aberto'
-  return status || 'Aberto'
+  return ({
+    OPEN: 'Aberto',
+    IN_PROGRESS: 'Em atendimento',
+    WAITING_CUSTOMER: 'Aguardando cliente',
+    RESOLVED: 'Resolvido',
+    CLOSED: 'Fechado',
+  })[status] || status || 'Aberto'
 }
 
-function statusClass(status) {
-  const value = normalize(status)
-  if (value === 'closed' || value === 'resolved' || value.includes('fechado') || value.includes('resolvido')) return 'bg-emerald-50 text-emerald-700'
-  if (value === 'waiting customer' || value.includes('aguardando cliente') || value.includes('pendente')) return 'bg-violet-50 text-violet-700'
-  if (isInProgress(value)) return 'bg-amber-50 text-amber-700'
+function statusStyle(status) {
+  if (status === 'CLOSED' || status === 'RESOLVED') {
+    return 'bg-emerald-50 text-emerald-700'
+  }
+
+  if (status === 'WAITING_CUSTOMER') {
+    return 'bg-violet-50 text-violet-700'
+  }
+
+  if (status === 'IN_PROGRESS') {
+    return 'bg-amber-50 text-amber-700'
+  }
+
   return 'bg-blue-50 text-blue-700'
 }
 
 function priorityLabel(priority) {
-  const value = normalize(priority)
-  if (value === 'urgent' || value === 'urgente') return 'Urgente'
-  if (value === 'alta' || value === 'high') return 'Alta'
-  if (value === 'baixa' || value === 'low') return 'Baixa'
-  return 'Normal'
+  return ({
+    LOW: 'Baixa',
+    NORMAL: 'Normal',
+    HIGH: 'Alta',
+    URGENT: 'Urgente',
+  })[priority] || 'Normal'
 }
 
-function priorityClass(priority) {
-  const value = normalize(priority)
-  if (value === 'alta' || value === 'high' || value === 'urgent' || value === 'urgente') return 'text-red-600'
-  if (value === 'baixa' || value === 'low') return 'text-slate-500'
+function priorityStyle(priority) {
+  if (priority === 'URGENT' || priority === 'HIGH') {
+    return 'text-red-600'
+  }
+
+  if (priority === 'LOW') {
+    return 'text-slate-500'
+  }
+
   return 'text-amber-600'
 }
 
-function formatDate(value) {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '—'
-  return date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
-}
-
-function errorMessage(error) {
+function readableError(error) {
   if (!error) return 'Ocorreu um erro inesperado.'
-  if (error.code === '42501') return 'O banco bloqueou esta operação pelas políticas de acesso (RLS). Confira o SQL de permissões do Portal do Cliente.'
-  if (error.code === '23514') return `Um valor não foi aceito por uma regra da tabela: ${error.message}`
-  if (error.code === '23502') return `Falta preencher um campo obrigatório no banco: ${error.message}`
-  if (error.code === '22P02') return `Um campo foi enviado em formato inválido: ${error.message}`
+
+  if (error.code === '42501') {
+    return 'O Supabase bloqueou a operação pelas regras de acesso (RLS). Confira as políticas da tabela.'
+  }
+
+  if (error.code === '23514') {
+    return `Um valor foi rejeitado por uma regra do banco: ${error.message}`
+  }
+
+  if (error.code === '23502') {
+    return `Falta um campo obrigatório: ${error.message}`
+  }
+
   return error.message || 'Não foi possível concluir a operação.'
-}
-
-
-function InboxIcon() {
-  return <Ticket size={24} />
 }
 
 export default function ClientPortal() {
   const navigate = useNavigate()
+
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [currentCustomer, setCurrentCustomer] = useState(null)
+  const [customer, setCustomer] = useState(null)
   const [company, setCompany] = useState(null)
   const [tickets, setTickets] = useState([])
-  const [modalOpen, setModalOpen] = useState(false)
-  const [form, setForm] = useState(initialForm)
-  const [selectedFiles, setSelectedFiles] = useState([])
-  const [pendingTicket, setPendingTicket] = useState(null)
+  const [pageError, setPageError] = useState('')
+  const [pageNotice, setPageNotice] = useState('')
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState('all')
+  const [filter, setFilter] = useState('ALL')
+
+  const [createOpen, setCreateOpen] = useState(false)
+  const [form, setForm] = useState(initialForm)
+  const [createFiles, setCreateFiles] = useState([])
+  const [pendingTicket, setPendingTicket] = useState(null)
+  const [savingTicket, setSavingTicket] = useState(false)
+
   const [selectedTicket, setSelectedTicket] = useState(null)
-  const [conversationMessages, setConversationMessages] = useState([])
+  const [messages, setMessages] = useState([])
+  const [initialAttachments, setInitialAttachments] = useState([])
   const [conversationLoading, setConversationLoading] = useState(false)
-  const [messageDraft, setMessageDraft] = useState('')
+  const [messageText, setMessageText] = useState('')
   const [messageFiles, setMessageFiles] = useState([])
   const [sendingMessage, setSendingMessage] = useState(false)
   const [closingTicket, setClosingTicket] = useState(false)
@@ -182,99 +171,141 @@ export default function ClientPortal() {
 
   const loadPortal = useCallback(async () => {
     setLoading(true)
-    setError('')
+    setPageError('')
 
     try {
-      const { data: authData, error: authError } = await supabase.auth.getUser()
-      if (authError) throw authError
-      if (!authData.user) throw new Error('Sua sessão expirou. Entre novamente.')
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser()
 
-      // customer_users define qual pessoa e qual empresa pertencem ao usuário autenticado.
+      if (authError) throw authError
+      if (!authData.user) {
+        throw new Error('Sua sessão expirou. Entre novamente.')
+      }
+
       const { data: links, error: linksError } = await supabase
         .from('customer_users')
         .select('customer_id, client_company_id')
         .eq('user_id', authData.user.id)
 
       if (linksError) throw linksError
-      if (!links?.length) throw new Error('Sua conta ainda não está vinculada a um cliente. Peça ao atendimento para verificar seu cadastro.')
 
-      // O portal inicial considera um vínculo de cliente por conta.
-      const link = links[0]
-      if (!link.customer_id || !link.client_company_id) {
-        throw new Error('O vínculo da sua conta está incompleto. Entre em contato com o atendimento.')
+      if (!links?.length) {
+        throw new Error('Sua conta não está vinculada a um cadastro de cliente.')
       }
 
-      const { data: customerData, error: customerError } = await supabase
-        .from('customers')
-        .select('id, organization_id, client_company_id, name, email')
-        .eq('id', link.customer_id)
-        .eq('client_company_id', link.client_company_id)
-        .single()
+      const link = links[0]
+
+      if (!link.customer_id || !link.client_company_id) {
+        throw new Error('O vínculo da sua conta está incompleto.')
+      }
+
+      const { data: customerData, error: customerError } =
+        await supabase
+          .from('customers')
+          .select('id, organization_id, client_company_id, name, email')
+          .eq('id', link.customer_id)
+          .eq('client_company_id', link.client_company_id)
+          .single()
 
       if (customerError) throw customerError
-      if (!customerData?.organization_id) throw new Error('Não foi possível identificar a organização responsável pelo seu atendimento.')
 
-      const { data: companyData, error: companyError } = await supabase
-        .from('client_companies')
-        .select('id, name')
-        .eq('id', link.client_company_id)
-        .eq('organization_id', customerData.organization_id)
-        .single()
+      if (!customerData.organization_id) {
+        throw new Error('Não foi possível identificar a organização responsável pelo atendimento.')
+      }
+
+      const { data: companyData, error: companyError } =
+        await supabase
+          .from('client_companies')
+          .select('id, name')
+          .eq('id', customerData.client_company_id)
+          .eq('organization_id', customerData.organization_id)
+          .single()
 
       if (companyError) throw companyError
 
-      setCurrentCustomer(customerData)
-      setCompany(companyData)
-
-      // A política RLS do SQL limita esta consulta aos chamados da empresa vinculada.
-      const { data: ticketData, error: ticketsError } = await supabase
-        .from('tickets')
-        .select('id, number, subject, description, status, priority, customer_id, client_company_id, created_at, updated_at, organization_id')
-        .eq('organization_id', customerData.organization_id)
-        .eq('client_company_id', customerData.client_company_id)
-        .order('created_at', { ascending: false })
+      const { data: ticketRows, error: ticketsError } =
+        await supabase
+          .from('tickets')
+          .select(`
+            id,
+            number,
+            subject,
+            description,
+            status,
+            priority,
+            customer_id,
+            client_company_id,
+            organization_id,
+            created_at,
+            updated_at
+          `)
+          .eq('organization_id', customerData.organization_id)
+          .eq('client_company_id', customerData.client_company_id)
+          .order('created_at', { ascending: false })
 
       if (ticketsError) throw ticketsError
 
-      // Carrega os metadados dos anexos e gera links temporários do bucket privado.
-      const ticketIds = (ticketData || []).map((ticket) => ticket.id)
-      let attachmentsByTicket = {}
-      if (ticketIds.length) {
-        const { data: attachmentRows, error: attachmentError } = await supabase
-          .from('ticket_attachments')
-          .select('id, ticket_id, message_id, file_name, storage_path, mime_type, file_size, created_at')
-          .in('ticket_id', ticketIds)
-          .order('created_at', { ascending: true })
+      const rows = ticketRows || []
+      const ticketIds = rows.map((item) => item.id)
 
-        if (attachmentError) {
-          console.warn('Não foi possível carregar os anexos dos chamados:', attachmentError)
-          setError('Os chamados foram carregados, mas não foi possível consultar os anexos. Verifique se o SQL de anexos foi executado no Supabase.')
-        } else {
-          const attachmentsWithUrls = await Promise.all((attachmentRows || []).map(async (attachment) => {
-            const { data: signedData, error: signedError } = await supabase.storage
-              .from(ATTACHMENTS_BUCKET)
-              .createSignedUrl(attachment.storage_path, 60 * 60)
-            if (signedError) {
-              console.warn('Não foi possível gerar o link do anexo:', signedError)
-              return { ...attachment, signed_url: null }
+      let attachments = []
+
+      if (ticketIds.length) {
+        const { data: attachmentRows, error: attachmentError } =
+          await supabase
+            .from('ticket_attachments')
+            .select(`
+              id,
+              ticket_id,
+              message_id,
+              file_name,
+              storage_path,
+              mime_type,
+              file_size,
+              created_at
+            `)
+            .in('ticket_id', ticketIds)
+            .order('created_at', { ascending: true })
+
+        if (attachmentError) throw attachmentError
+
+        attachments = await Promise.all(
+          (attachmentRows || []).map(async (item) => {
+            const { data, error } = await supabase.storage
+              .from(BUCKET)
+              .createSignedUrl(item.storage_path, 3600)
+
+            if (error) {
+              console.warn('Falha ao abrir link do anexo:', error)
             }
-            return { ...attachment, signed_url: signedData?.signedUrl || null }
-          }))
-          attachmentsByTicket = attachmentsWithUrls.reduce((acc, attachment) => {
-            if (!acc[attachment.ticket_id]) acc[attachment.ticket_id] = []
-            acc[attachment.ticket_id].push(attachment)
-            return acc
-          }, {})
-        }
+
+            return {
+              ...item,
+              signed_url: data?.signedUrl || null,
+            }
+          })
+        )
       }
 
-      setTickets((ticketData || []).map((ticket) => ({
-        ...ticket,
-        attachments: (attachmentsByTicket[ticket.id] || []).filter((attachment) => !attachment.message_id),
-      })))
-    } catch (err) {
-      console.error('Erro ao carregar Portal do Cliente:', err)
-      setError(errorMessage(err))
+      const byTicket = attachments.reduce((acc, item) => {
+        if (!acc[item.ticket_id]) acc[item.ticket_id] = []
+        acc[item.ticket_id].push(item)
+        return acc
+      }, {})
+
+      setCustomer(customerData)
+      setCompany(companyData)
+
+      setTickets(
+        rows.map((item) => ({
+          ...item,
+          attachments: (byTicket[item.id] || [])
+            .filter((attachment) => !attachment.message_id),
+        }))
+      )
+    } catch (error) {
+      console.error('Erro ao carregar portal:', error)
+      setPageError(readableError(error))
     } finally {
       setLoading(false)
     }
@@ -286,110 +317,134 @@ export default function ClientPortal() {
 
   const filteredTickets = useMemo(() => {
     const term = search.trim().toLowerCase()
+
     return tickets.filter((ticket) => {
-      const matchesSearch = !term ||
-        String(ticket.number || '').toLowerCase().includes(term) ||
+      const matchesText =
+        !term ||
+        String(ticket.number || '').includes(term) ||
         String(ticket.subject || '').toLowerCase().includes(term) ||
         String(ticket.description || '').toLowerCase().includes(term)
 
-      const matchesFilter =
-        filter === 'all' ||
-        (filter === 'open' && !isClosed(ticket.status)) ||
-        (filter === 'closed' && isClosed(ticket.status))
+      const matchesStatus =
+        filter === 'ALL' ||
+        (
+          filter === 'OPEN' &&
+          ticket.status !== 'CLOSED' &&
+          ticket.status !== 'RESOLVED'
+        ) ||
+        (
+          filter === 'CLOSED' &&
+          (ticket.status === 'CLOSED' || ticket.status === 'RESOLVED')
+        )
 
-      return matchesSearch && matchesFilter
+      return matchesText && matchesStatus
     })
   }, [tickets, search, filter])
 
-  const openCount = tickets.filter((ticket) => !isClosed(ticket.status)).length
-  const closedCount = tickets.filter((ticket) => isClosed(ticket.status)).length
+  async function signOut() {
+    const { error } = await supabase.auth.signOut()
 
-  function openNewTicket() {
-    setForm(initialForm)
-    setSelectedFiles([])
-    setPendingTicket(null)
-    setError('')
-    setSuccess('')
-    setModalOpen(true)
-  }
-
-  function closeModal() {
-    if (saving) return
-    if (pendingTicket) {
-      setError('Este chamado já foi criado. Envie os anexos pendentes antes de fechar esta janela.')
+    if (error) {
+      setPageError(error.message)
       return
     }
-    setModalOpen(false)
-    setForm(initialForm)
-    setSelectedFiles([])
+
+    navigate('/login', { replace: true })
   }
 
-  function handleAttachmentSelection(event) {
-    const incomingFiles = Array.from(event.target.files || [])
+  function chooseFiles(
+    event,
+    setter,
+    currentFiles,
+    setFileError = setConversationError
+  ) {
+    const incoming = Array.from(event.target.files || [])
     event.target.value = ''
-    if (!incomingFiles.length) return
 
-    const nextFiles = [...selectedFiles]
-    for (const file of incomingFiles) {
-      const extension = fileExtension(file.name)
-      if (!MIME_BY_EXTENSION[extension]) {
-        setError(`O arquivo \"${file.name}\" não tem um formato permitido. Envie imagens, PDF, Word, Excel, PowerPoint ou arquivos de texto.`)
+    if (!incoming.length) return
+
+    const next = [...currentFiles]
+
+    for (const file of incoming) {
+      const ext = extension(file.name)
+
+      if (!MIME[ext]) {
+        setFileError(`Formato não permitido: ${file.name}`)
         return
       }
-      if (file.size <= 0) {
-        setError(`O arquivo \"${file.name}\" está vazio e não pode ser anexado.`)
+
+      if (!file.size || file.size > MAX_SIZE) {
+        setFileError(`O arquivo ${file.name} deve ter até 10 MB.`)
         return
       }
-      if (file.size > MAX_ATTACHMENT_SIZE) {
-        setError(`O arquivo \"${file.name}\" ultrapassa o limite de 10 MB.`)
+
+      if (next.length >= MAX_FILES) {
+        setFileError(`O limite é de ${MAX_FILES} arquivos por envio.`)
         return
       }
-      if (nextFiles.length >= MAX_ATTACHMENT_FILES) {
-        setError(`Você pode anexar no máximo ${MAX_ATTACHMENT_FILES} arquivos por chamado.`)
-        return
-      }
-      if (!nextFiles.some((existing) => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified)) {
-        nextFiles.push(file)
+
+      if (
+        !next.some(
+          (old) =>
+            old.name === file.name &&
+            old.size === file.size &&
+            old.lastModified === file.lastModified
+        )
+      ) {
+        next.push(file)
       }
     }
 
-    setSelectedFiles(nextFiles)
-    setError('')
+    setter(next)
+    setFileError('')
   }
 
-  async function uploadTicketAttachments(ticket, filesToUpload, userId, messageId = null) {
-    if (!filesToUpload.length) return
+  async function uploadAttachments(ticket, files, userId, messageId = null) {
+    if (!files.length) return
 
     const uploadedPaths = []
+
     try {
       const metadata = []
-      for (const file of filesToUpload) {
-        const safeName = safeStorageFileName(file.name)
-        const uniquePart = typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
-        const storagePath = `${currentCustomer.organization_id}/${currentCustomer.client_company_id}/${ticket.id}/${uniquePart}-${safeName}`
-        const mimeType = attachmentMimeType(file)
+
+      for (const file of files) {
+        const unique =
+          typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+        const path =
+          `${ticket.organization_id}/` +
+          `${ticket.client_company_id}/` +
+          `${ticket.id}/` +
+          `${unique}-${safeName(file.name)}`
+
+        const contentType =
+          MIME[extension(file.name)] ||
+          file.type ||
+          'application/octet-stream'
 
         const { error: uploadError } = await supabase.storage
-          .from(ATTACHMENTS_BUCKET)
-          .upload(storagePath, file, {
+          .from(BUCKET)
+          .upload(path, file, {
             cacheControl: '3600',
-            contentType: mimeType,
+            contentType,
             upsert: false,
           })
+
         if (uploadError) throw uploadError
 
-        uploadedPaths.push(storagePath)
+        uploadedPaths.push(path)
+
         metadata.push({
           ticket_id: ticket.id,
-          organization_id: currentCustomer.organization_id,
-          client_company_id: currentCustomer.client_company_id,
+          organization_id: ticket.organization_id,
+          client_company_id: ticket.client_company_id,
           uploaded_by: userId,
           ...(messageId ? { message_id: messageId } : {}),
           file_name: file.name,
-          storage_path: storagePath,
-          mime_type: mimeType,
+          storage_path: path,
+          mime_type: contentType,
           file_size: file.size,
         })
       }
@@ -397,920 +452,1104 @@ export default function ClientPortal() {
       const { error: metadataError } = await supabase
         .from('ticket_attachments')
         .insert(metadata)
+
       if (metadataError) throw metadataError
-    } catch (uploadError) {
+    } catch (error) {
       if (uploadedPaths.length) {
-        const { error: cleanupError } = await supabase.storage.from(ATTACHMENTS_BUCKET).remove(uploadedPaths)
-        if (cleanupError) console.warn('Falha ao remover arquivos enviados parcialmente:', cleanupError)
+        await supabase.storage
+          .from(BUCKET)
+          .remove(uploadedPaths)
       }
-      throw uploadError
+
+      throw error
     }
   }
 
-  async function handleCreateTicket(event) {
-    event.preventDefault()
-    setError('')
-    setSuccess('')
+  function openCreateModal() {
+    setForm(initialForm)
+    setCreateFiles([])
+    setPendingTicket(null)
+    setPageError('')
+    setPageNotice('')
+    setCreateOpen(true)
+  }
 
-    if (!currentCustomer || !company) {
-      setError('Não foi possível identificar seu cadastro e sua empresa.')
+  async function createTicket(event) {
+    event.preventDefault()
+
+    if (!customer || !company) {
+      setPageError('Não foi possível identificar sua empresa.')
       return
     }
 
-    const subject = form.subject.trim()
-    const description = form.description.trim()
-    if (!pendingTicket && !subject) return setError('Informe o assunto do chamado.')
-    if (!pendingTicket && !description) return setError('Descreva o problema ou solicitação.')
-    if (!pendingTicket && subject.length > 180) return setError('O assunto deve ter no máximo 180 caracteres.')
-    if (!pendingTicket && selectedFiles.length > MAX_ATTACHMENT_FILES) return setError(`Você pode anexar no máximo ${MAX_ATTACHMENT_FILES} arquivos por chamado.`)
+    if (!form.subject.trim() || !form.description.trim()) {
+      setPageError('Preencha o assunto e a descrição do chamado.')
+      return
+    }
 
-    setSaving(true)
-    let ticketBeingCreatedOrRetried = pendingTicket
+    setSavingTicket(true)
+    setPageError('')
+
+    let ticketToUse = pendingTicket
 
     try {
-      const { data: authData, error: authError } = await supabase.auth.getUser()
-      if (authError) throw authError
-      if (!authData.user) throw new Error('Sua sessão expirou. Entre novamente.')
+      const { data: auth, error: authError } =
+        await supabase.auth.getUser()
 
-      if (!ticketBeingCreatedOrRetried) {
-        const { data: createdTicket, error: insertError } = await supabase
+      if (authError) throw authError
+      if (!auth.user) throw new Error('Sua sessão expirou. Entre novamente.')
+
+      if (!ticketToUse) {
+        const { data, error } = await supabase
           .from('tickets')
           .insert({
-            organization_id: currentCustomer.organization_id,
-            client_company_id: currentCustomer.client_company_id,
-            customer_id: currentCustomer.id,
-            subject,
-            description,
+            organization_id: customer.organization_id,
+            client_company_id: customer.client_company_id,
+            customer_id: customer.id,
+            subject: form.subject.trim(),
+            description: form.description.trim(),
             priority: form.priority,
             status: 'OPEN',
           })
-          .select('id, number')
+          .select('id, number, organization_id, client_company_id')
           .single()
 
-        if (insertError) throw insertError
-        if (!createdTicket?.id) throw new Error('O chamado foi enviado, mas o banco não retornou seu identificador. Atualize a página antes de tentar novamente.')
-        ticketBeingCreatedOrRetried = createdTicket
-        if (selectedFiles.length) setPendingTicket(createdTicket)
+        if (error) throw error
+        ticketToUse = data
       }
 
-      if (selectedFiles.length) {
-        await uploadTicketAttachments(ticketBeingCreatedOrRetried, selectedFiles, authData.user.id)
+      if (createFiles.length) {
+        await uploadAttachments(
+          ticketToUse,
+          createFiles,
+          auth.user.id
+        )
       }
 
-      const wasRetry = Boolean(pendingTicket)
+      setCreateOpen(false)
       setPendingTicket(null)
-      setModalOpen(false)
+      setCreateFiles([])
       setForm(initialForm)
-      setSelectedFiles([])
-      setSuccess(wasRetry
-        ? `Anexos enviados com sucesso para o chamado #${ticketBeingCreatedOrRetried.number ?? ticketBeingCreatedOrRetried.id}.`
-        : `Chamado #${ticketBeingCreatedOrRetried.number ?? ticketBeingCreatedOrRetried.id} aberto com sucesso${selectedFiles.length ? ' e anexos enviados' : ''}!`)
+
+      setPageNotice(
+        `Chamado #${ticketToUse.number ?? ticketToUse.id} criado com sucesso.`
+      )
+
       await loadPortal()
-    } catch (err) {
-      console.error('Erro ao abrir chamado ou enviar anexos:', err)
-      if (ticketBeingCreatedOrRetried) {
-        setPendingTicket(ticketBeingCreatedOrRetried)
-        setError(`O chamado #${ticketBeingCreatedOrRetried.number ?? ticketBeingCreatedOrRetried.id} já foi criado, mas não foi possível concluir o envio dos anexos. Seus arquivos continuam selecionados. Clique em “Tentar enviar anexos” para repetir sem criar outro chamado. Detalhe: ${errorMessage(err)}`)
+    } catch (error) {
+      console.error('Erro ao criar chamado:', error)
+
+      if (ticketToUse) {
+        setPendingTicket(ticketToUse)
+        setPageError(
+          `O chamado já foi criado, mas houve falha no envio dos anexos. ` +
+          `Clique novamente em enviar para tentar anexá-los sem duplicar o chamado. ` +
+          readableError(error)
+        )
       } else {
-        setError(errorMessage(err))
+        setPageError(readableError(error))
       }
     } finally {
-      setSaving(false)
+      setSavingTicket(false)
     }
   }
 
-  const selectedTicketId = selectedTicket?.id || null
-
   const loadConversation = useCallback(async (ticketId) => {
     if (!ticketId) return
+
     setConversationLoading(true)
     setConversationError('')
 
     try {
-      const { data: messageRows, error: messagesError } = await supabase
-        .from('ticket_messages')
-        .select('id, ticket_id, sender_id, sender_type, body, created_at')
-        .eq('ticket_id', ticketId)
-        .order('created_at', { ascending: true })
+      const [messageResult, attachmentResult] = await Promise.all([
+        supabase
+          .from('ticket_messages')
+          .select(`
+            id,
+            ticket_id,
+            organization_id,
+            client_company_id,
+            sender_id,
+            sender_type,
+            message,
+            created_at
+          `)
+          .eq('ticket_id', ticketId)
+          .order('created_at', { ascending: true }),
 
-      if (messagesError) throw messagesError
+        supabase
+          .from('ticket_attachments')
+          .select(`
+            id,
+            ticket_id,
+            message_id,
+            file_name,
+            storage_path,
+            mime_type,
+            file_size,
+            created_at
+          `)
+          .eq('ticket_id', ticketId)
+          .order('created_at', { ascending: true }),
+      ])
 
-      const { data: attachmentRows, error: attachmentError } = await supabase
-        .from('ticket_attachments')
-        .select('id, ticket_id, message_id, file_name, storage_path, mime_type, file_size, created_at')
-        .eq('ticket_id', ticketId)
-        .not('message_id', 'is', null)
-        .order('created_at', { ascending: true })
+      if (messageResult.error) throw messageResult.error
+      if (attachmentResult.error) throw attachmentResult.error
 
-      if (attachmentError) throw attachmentError
+      const allAttachments = await Promise.all(
+        (attachmentResult.data || []).map(async (item) => {
+          const { data, error } = await supabase.storage
+            .from(BUCKET)
+            .createSignedUrl(item.storage_path, 3600)
 
-      const attachmentsWithUrls = await Promise.all((attachmentRows || []).map(async (attachment) => {
-        const { data: signedData, error: signedError } = await supabase.storage
-          .from(ATTACHMENTS_BUCKET)
-          .createSignedUrl(attachment.storage_path, 60 * 60)
-        if (signedError) console.warn('Não foi possível gerar link do anexo da mensagem:', signedError)
-        return { ...attachment, signed_url: signedData?.signedUrl || null }
-      }))
+          if (error) {
+            console.warn('Falha ao gerar link do anexo:', error)
+          }
 
-      const byMessage = attachmentsWithUrls.reduce((acc, attachment) => {
-        if (!acc[attachment.message_id]) acc[attachment.message_id] = []
-        acc[attachment.message_id].push(attachment)
+          return {
+            ...item,
+            signed_url: data?.signedUrl || null,
+          }
+        })
+      )
+
+      setInitialAttachments(
+        allAttachments.filter((item) => !item.message_id)
+      )
+
+      const byMessage = allAttachments.reduce((acc, item) => {
+        if (item.message_id) {
+          if (!acc[item.message_id]) acc[item.message_id] = []
+          acc[item.message_id].push(item)
+        }
         return acc
       }, {})
 
-      setConversationMessages((messageRows || []).map((message) => ({
-        ...message,
-        attachments: byMessage[message.id] || [],
-      })))
-    } catch (err) {
-      console.error('Erro ao carregar conversa do chamado:', err)
-      setConversationError(errorMessage(err))
+      setMessages(
+        (messageResult.data || []).map((item) => ({
+          ...item,
+          attachments: byMessage[item.id] || [],
+        }))
+      )
+    } catch (error) {
+      console.error('Erro ao carregar mensagens:', error)
+      setConversationError(readableError(error))
     } finally {
       setConversationLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    if (!selectedTicketId) {
-      setConversationMessages([])
-      setMessageDraft('')
+    const ticketId = selectedTicket?.id
+
+    if (!ticketId) {
+      setMessages([])
+      setInitialAttachments([])
+      setMessageText('')
       setMessageFiles([])
-      setConversationError('')
-      setConversationNotice('')
       return undefined
     }
 
-    loadConversation(selectedTicketId)
+    loadConversation(ticketId)
+
     const channel = supabase
-      .channel(`customer-ticket-messages-${selectedTicketId}`)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'ticket_messages',
-        filter: `ticket_id=eq.${selectedTicketId}`,
-      }, () => loadConversation(selectedTicketId))
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'ticket_attachments',
-        filter: `ticket_id=eq.${selectedTicketId}`,
-      }, () => loadConversation(selectedTicketId))
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'tickets',
-        filter: `id=eq.${selectedTicketId}`,
-      }, (payload) => {
-        const updated = payload?.new
-        if (!updated?.id) return
-        setSelectedTicket((current) => current?.id === updated.id ? { ...current, status: updated.status, updated_at: updated.updated_at } : current)
-        setTickets((current) => current.map((ticket) => ticket.id === updated.id ? { ...ticket, status: updated.status, updated_at: updated.updated_at } : ticket))
-      })
+      .channel(`customer-conversation-${ticketId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'ticket_messages',
+          filter: `ticket_id=eq.${ticketId}`,
+        },
+        () => loadConversation(ticketId)
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'ticket_attachments',
+          filter: `ticket_id=eq.${ticketId}`,
+        },
+        () => loadConversation(ticketId)
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'tickets',
+          filter: `id=eq.${ticketId}`,
+        },
+        (payload) => {
+          const updated = payload.new
+
+          if (updated?.id) {
+            setSelectedTicket((current) =>
+              current?.id === updated.id
+                ? {
+                    ...current,
+                    status: updated.status,
+                    updated_at: updated.updated_at,
+                  }
+                : current
+            )
+
+            setTickets((current) =>
+              current.map((item) =>
+                item.id === updated.id
+                  ? {
+                      ...item,
+                      status: updated.status,
+                      updated_at: updated.updated_at,
+                    }
+                  : item
+              )
+            )
+          }
+        }
+      )
       .subscribe()
 
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [selectedTicketId, loadConversation])
+  }, [selectedTicket?.id, loadConversation])
 
-  function handleMessageFileSelection(event) {
-    const incoming = Array.from(event.target.files || [])
-    event.target.value = ''
-    if (!incoming.length) return
-
-    const next = [...messageFiles]
-    for (const file of incoming) {
-      if (!MIME_BY_EXTENSION[fileExtension(file.name)]) {
-        setConversationError(`O arquivo "${file.name}" não possui um formato permitido.`)
-        return
-      }
-      if (file.size <= 0 || file.size > MAX_ATTACHMENT_SIZE) {
-        setConversationError(`O arquivo "${file.name}" deve ter entre 1 byte e 10 MB.`)
-        return
-      }
-      if (next.length >= MAX_ATTACHMENT_FILES) {
-        setConversationError(`Anexe no máximo ${MAX_ATTACHMENT_FILES} arquivos por mensagem.`)
-        return
-      }
-      if (!next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) next.push(file)
-    }
-    setMessageFiles(next)
-    setConversationError('')
-  }
-
-  async function handleSendMessage(event) {
+  async function sendCustomerMessage(event) {
     event.preventDefault()
-    if (!selectedTicket || isFinalizedTicket(selectedTicket.status)) return
-    const body = messageDraft.trim()
-    if (!body && messageFiles.length === 0) {
-      setConversationError('Escreva uma mensagem ou selecione um arquivo para enviar.')
+
+    if (!selectedTicket || selectedTicket.status === 'CLOSED') return
+
+    const text = messageText.trim()
+
+    if (!text && !messageFiles.length) {
+      setConversationError('Escreva uma mensagem ou selecione um arquivo.')
       return
     }
 
     setSendingMessage(true)
     setConversationError('')
     setConversationNotice('')
-    let messageWasSent = false
+
+    let messageCreated = false
 
     try {
-      const { data: authData, error: authError } = await supabase.auth.getUser()
-      if (authError) throw authError
-      if (!authData.user) throw new Error('Sua sessão expirou. Entre novamente.')
+      const { data: auth, error: authError } =
+        await supabase.auth.getUser()
 
-      const { data: newMessage, error: messageError } = await supabase
+      if (authError) throw authError
+      if (!auth.user) throw new Error('Sua sessão expirou. Entre novamente.')
+
+      const { data: inserted, error } = await supabase
         .from('ticket_messages')
         .insert({
           ticket_id: selectedTicket.id,
-          sender_id: authData.user.id,
+          organization_id: selectedTicket.organization_id,
+          client_company_id: selectedTicket.client_company_id,
+          sender_id: auth.user.id,
           sender_type: 'CUSTOMER',
-          body: body || 'Arquivo anexado.',
+          message: text || 'Arquivo anexado.',
         })
         .select('id')
         .single()
 
-      if (messageError) throw messageError
-      messageWasSent = true
-      setMessageDraft('')
+      if (error) throw error
+
+      messageCreated = true
 
       if (messageFiles.length) {
-        await uploadTicketAttachments(selectedTicket, messageFiles, authData.user.id, newMessage.id)
+        await uploadAttachments(
+          selectedTicket,
+          messageFiles,
+          auth.user.id,
+          inserted.id
+        )
       }
 
+      setMessageText('')
       setMessageFiles([])
       setConversationNotice('Mensagem enviada para a equipe de atendimento.')
+
       await loadConversation(selectedTicket.id)
 
-      const { data: latestTicket, error: latestTicketError } = await supabase
+      const { data: latest } = await supabase
         .from('tickets')
-        .select('id, status, updated_at')
+        .select('status, updated_at')
         .eq('id', selectedTicket.id)
         .single()
-      if (!latestTicketError && latestTicket) {
-        setSelectedTicket((current) => current?.id === latestTicket.id ? { ...current, ...latestTicket } : current)
-        setTickets((current) => current.map((ticket) => ticket.id === latestTicket.id ? { ...ticket, ...latestTicket } : ticket))
+
+      if (latest) {
+        setSelectedTicket((current) =>
+          current ? { ...current, ...latest } : current
+        )
+
+        setTickets((current) =>
+          current.map((item) =>
+            item.id === selectedTicket.id
+              ? { ...item, ...latest }
+              : item
+          )
+        )
       }
-    } catch (err) {
-      console.error('Erro ao enviar mensagem do cliente:', err)
-      if (messageWasSent) {
-        setConversationError(`A mensagem foi enviada, mas ocorreu um problema ao enviar os anexos. ${errorMessage(err)}`)
-      } else {
-        setConversationError(errorMessage(err))
-      }
+    } catch (error) {
+      console.error('Erro ao enviar resposta do cliente:', error)
+
+      setConversationError(
+        messageCreated
+          ? `A mensagem foi enviada, mas houve falha no anexo. ${readableError(error)}`
+          : readableError(error)
+      )
     } finally {
       setSendingMessage(false)
     }
   }
 
-  async function handleCustomerCloseTicket() {
-    if (!selectedTicket || isFinalizedTicket(selectedTicket.status)) return
-    const confirmed = window.confirm(`Deseja finalizar o chamado #${selectedTicket.number ?? selectedTicket.id}? Depois de finalizado, não será possível enviar novas mensagens.`)
+  async function finishTicket() {
+    if (!selectedTicket || selectedTicket.status === 'CLOSED') return
+
+    const confirmed = window.confirm(
+      `Deseja finalizar o chamado #${selectedTicket.number ?? selectedTicket.id}?`
+    )
+
     if (!confirmed) return
 
     setClosingTicket(true)
     setConversationError('')
     setConversationNotice('')
+
     try {
-      const { error: closeError } = await supabase.rpc('customer_close_ticket', {
+      const { error } = await supabase.rpc('customer_close_ticket', {
         p_ticket_id: selectedTicket.id,
       })
-      if (closeError) throw closeError
 
-      setSelectedTicket((current) => current ? { ...current, status: 'CLOSED' } : current)
-      setTickets((current) => current.map((ticket) => ticket.id === selectedTicket.id ? { ...ticket, status: 'CLOSED' } : ticket))
+      if (error) throw error
+
+      setSelectedTicket((current) =>
+        current ? { ...current, status: 'CLOSED' } : current
+      )
+
+      setTickets((current) =>
+        current.map((item) =>
+          item.id === selectedTicket.id
+            ? { ...item, status: 'CLOSED' }
+            : item
+        )
+      )
+
       setConversationNotice('Chamado finalizado com sucesso.')
-    } catch (err) {
-      console.error('Erro ao finalizar chamado:', err)
-      setConversationError(errorMessage(err))
+    } catch (error) {
+      console.error('Erro ao finalizar chamado:', error)
+      setConversationError(readableError(error))
     } finally {
       setClosingTicket(false)
     }
   }
 
-  async function handleSignOut() {
-    const { error: signOutError } = await supabase.auth.signOut()
-    if (signOutError) {
-      setError(signOutError.message)
-      return
-    }
-    navigate('/login', { replace: true })
-  }
+  const openCount = tickets.filter(
+    (item) => item.status !== 'CLOSED' && item.status !== 'RESOLVED'
+  ).length
+
+  const closedCount = tickets.filter(
+    (item) => item.status === 'CLOSED' || item.status === 'RESOLVED'
+  ).length
 
   return (
-    <div className="min-h-screen bg-[#f5f7fb] text-slate-900">
-      <div className="min-h-screen md:flex">
-        {/* Navegação lateral */}
-        <aside className="hidden w-[248px] shrink-0 flex-col border-r border-slate-200/80 bg-white px-5 py-6 md:flex">
-          <div className="flex items-center gap-3 px-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
               <Headphones size={21} />
             </div>
             <div>
-              <p className="text-[15px] font-extrabold tracking-tight text-slate-900">Inderio Desk</p>
-              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">Área do cliente</p>
+              <p className="font-extrabold">Inderio Desk</p>
+              <p className="text-xs text-slate-500">
+                {company?.name || 'Portal do cliente'}
+              </p>
             </div>
           </div>
 
-          <div className="mt-10 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Menu principal</div>
-          <nav className="mt-3 space-y-1">
-            <div className="flex items-center gap-3 rounded-xl bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-700">
-              <LayoutDashboard size={18} /> Visão geral
+          <div className="flex items-center gap-3">
+            <div className="hidden text-right sm:block">
+              <p className="text-sm font-semibold">
+                {customer?.name || 'Cliente'}
+              </p>
+              <p className="text-xs text-slate-500">Acesso do cliente</p>
             </div>
-            <div className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-500">
-              <Ticket size={18} /> Meus chamados
-            </div>
-            <button type="button" onClick={openNewTicket} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-800">
-              <Plus size={18} /> Abrir solicitação
+
+            <button
+              onClick={signOut}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              <LogOut size={15} />
+              Sair
             </button>
-          </nav>
-
-          <div className="mt-auto rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">
-              <ShieldCheck size={18} />
-            </div>
-            <p className="mt-3 text-sm font-bold text-slate-800">Atendimento seguro</p>
-            <p className="mt-1 text-xs leading-5 text-slate-500">Seus chamados ficam disponíveis apenas para sua empresa e a equipe responsável.</p>
           </div>
-        </aside>
+        </div>
+      </header>
 
-        <div className="min-w-0 flex-1">
-          {/* Cabeçalho */}
-          <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/90 backdrop-blur-xl">
-            <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-4 py-4 sm:px-7 lg:px-9">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white md:hidden">
-                  <Headphones size={19} />
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-slate-800">{company?.name || 'Portal do cliente'}</p>
-                  <p className="text-xs text-slate-400">Central de atendimento</p>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-3">
-                <div className="hidden text-right sm:block">
-                  <p className="text-sm font-semibold text-slate-700">{currentCustomer?.name || 'Cliente'}</p>
-                  <p className="text-xs text-slate-400">Acesso do cliente</p>
-                </div>
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-sm font-bold text-blue-700">
-                  {(currentCustomer?.name || 'C').trim().charAt(0).toUpperCase()}
-                </div>
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
-                >
-                  <LogOut size={15} /> <span className="hidden sm:inline">Sair</span>
-                </button>
-              </div>
+      <main className="mx-auto max-w-7xl space-y-6 px-4 py-7 sm:px-6">
+        {pageError && (
+          <div className="flex gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <AlertCircle size={18} className="shrink-0" />
+            {pageError}
+          </div>
+        )}
+
+        {pageNotice && (
+          <div className="flex gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            <CheckCircle2 size={18} />
+            {pageNotice}
+          </div>
+        )}
+
+        <section className="flex flex-col justify-between gap-4 rounded-3xl bg-gradient-to-r from-blue-900 to-blue-600 p-6 text-white sm:flex-row sm:items-center sm:p-8">
+          <div>
+            <p className="text-sm font-semibold text-blue-100">
+              Central de atendimento
+            </p>
+            <h1 className="mt-2 text-2xl font-bold">
+              Olá, {customer?.name?.split(' ')[0] || 'bem-vindo'}!
+            </h1>
+            <p className="mt-2 max-w-xl text-sm text-blue-100">
+              Abra chamados, acompanhe as respostas e converse diretamente com a equipe.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={openCreateModal}
+              disabled={!customer || loading}
+              className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-blue-700 disabled:opacity-50"
+            >
+              <Plus size={17} />
+              Novo chamado
+            </button>
+
+            <button
+              onClick={loadPortal}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-semibold hover:bg-white/10"
+            >
+              <RefreshCw
+                size={16}
+                className={loading ? 'animate-spin' : ''}
+              />
+              Atualizar
+            </button>
+          </div>
+        </section>
+
+        <section className="grid gap-4 sm:grid-cols-3">
+          <Stat
+            icon={<Ticket size={20} />}
+            label="Total de chamados"
+            value={loading ? '—' : tickets.length}
+          />
+          <Stat
+            icon={<Clock3 size={20} />}
+            label="Em andamento"
+            value={loading ? '—' : openCount}
+          />
+          <Stat
+            icon={<CheckCircle2 size={20} />}
+            label="Resolvidos / fechados"
+            value={loading ? '—' : closedCount}
+          />
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-bold">Chamados da minha empresa</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Clique em um chamado para abrir a conversa.
+              </p>
             </div>
-          </header>
 
-          <main className="mx-auto max-w-[1440px] space-y-7 px-4 py-7 sm:px-7 sm:py-9 lg:px-9">
-            {error && !modalOpen && (
-              <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                <AlertCircle size={18} className="mt-0.5 shrink-0" />
-                <span>{error}</span>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative">
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Buscar chamado..."
+                  className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-blue-400 sm:w-56"
+                />
               </div>
-            )}
-            {success && (
-              <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
-                <span>{success}</span>
-              </div>
-            )}
 
-            {/* Boas-vindas e ação principal */}
-            <section className="relative isolate overflow-hidden rounded-[28px] bg-gradient-to-br from-[#123c91] via-[#1756c5] to-[#2877e8] px-6 py-7 text-white shadow-xl shadow-blue-900/10 sm:px-8 sm:py-9">
-              <div className="pointer-events-none absolute -right-16 -top-28 -z-10 h-80 w-80 rounded-full border-[34px] border-white/[0.07]" />
-              <div className="pointer-events-none absolute right-24 top-24 -z-10 h-44 w-44 rounded-full bg-cyan-300/10 blur-2xl" />
-              <div className="relative flex flex-col justify-between gap-7 lg:flex-row lg:items-center">
-                <div className="max-w-2xl">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-blue-50">
-                    <Sparkles size={14} /> Central de suporte
-                  </div>
-                  <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">Olá, {currentCustomer?.name?.split(' ')[0] || 'bem-vindo'}!</h1>
-                  <p className="mt-2 max-w-xl text-sm leading-6 text-blue-100 sm:text-[15px]">
-                    Como podemos ajudar hoje? Abra uma solicitação e acompanhe por aqui cada atualização da equipe.
-                  </p>
-                </div>
-                <div className="flex shrink-0 flex-col gap-3 sm:flex-row lg:flex-col xl:flex-row">
-                  <button
-                    type="button"
-                    onClick={openNewTicket}
-                    disabled={!currentCustomer || loading}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-blue-700 shadow-lg shadow-blue-950/10 transition hover:-translate-y-0.5 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Plus size={17} /> Novo chamado <ArrowUpRight size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={loadPortal}
-                    disabled={loading}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-50"
-                  >
-                    <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Atualizar dados
-                  </button>
-                </div>
-              </div>
-            </section>
+              <select
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
+              >
+                <option value="ALL">Todos os chamados</option>
+                <option value="OPEN">Em aberto</option>
+                <option value="CLOSED">Resolvidos / fechados</option>
+              </select>
+            </div>
+          </div>
 
-            {/* Indicadores */}
-            <section>
-              <div className="mb-4 flex items-end justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-bold tracking-tight text-slate-900">Resumo dos chamados</h2>
-                  <p className="mt-1 text-sm text-slate-500">Acompanhe a situação das solicitações da sua empresa.</p>
-                </div>
-                <span className="hidden rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-500 ring-1 ring-slate-200 sm:inline-flex">Atualizado ao consultar</span>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <article className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] transition hover:-translate-y-0.5 hover:shadow-md">
-                  <div className="flex items-center justify-between">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Ticket size={21} /></div>
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Total</span>
-                  </div>
-                  <p className="mt-5 text-3xl font-bold tracking-tight text-slate-900">{loading ? '—' : tickets.length}</p>
-                  <p className="mt-1 text-sm text-slate-500">Chamados da empresa</p>
-                </article>
-                <article className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] transition hover:-translate-y-0.5 hover:shadow-md">
-                  <div className="flex items-center justify-between">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600"><Clock3 size={21} /></div>
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Em andamento</span>
-                  </div>
-                  <p className="mt-5 text-3xl font-bold tracking-tight text-slate-900">{loading ? '—' : openCount}</p>
-                  <p className="mt-1 text-sm text-slate-500">Aguardando ou em atendimento</p>
-                </article>
-                <article className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] transition hover:-translate-y-0.5 hover:shadow-md">
-                  <div className="flex items-center justify-between">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600"><CheckCircle2 size={21} /></div>
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Concluídos</span>
-                  </div>
-                  <p className="mt-5 text-3xl font-bold tracking-tight text-slate-900">{loading ? '—' : closedCount}</p>
-                  <p className="mt-1 text-sm text-slate-500">Solicitações resolvidas</p>
-                </article>
-              </div>
-            </section>
-
-            {/* Lista e painel de apoio */}
-            <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
-              <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-900/[0.02]">
-                <div className="border-b border-slate-100 p-5 sm:px-6 sm:py-5">
-                  <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h2 className="text-base font-bold text-slate-900">Solicitações recentes</h2>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-500">{tickets.length}</span>
-                      </div>
-                      <p className="mt-1 text-sm text-slate-500">Visualize os chamados registrados pela sua empresa.</p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <div className="relative min-w-0 sm:w-64">
-                        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <input
-                          value={search}
-                          onChange={(event) => setSearch(event.target.value)}
-                          placeholder="Buscar por número ou assunto"
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50/70 py-2.5 pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-                        />
-                      </div>
-                      <div className="relative">
-                        <Filter size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <select
-                          value={filter}
-                          onChange={(event) => setFilter(event.target.value)}
-                          className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/70 py-2.5 pl-9 pr-8 text-sm font-medium text-slate-600 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10 sm:w-auto"
-                        >
-                          <option value="all">Todos os chamados</option>
-                          <option value="open">Em aberto</option>
-                          <option value="closed">Resolvidos</option>
-                        </select>
-                        <ChevronRight size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-slate-400" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {loading ? (
-                  <div className="space-y-4 p-6">
-                    {[1, 2, 3].map((item) => <div key={item} className="h-14 animate-pulse rounded-xl bg-slate-100" />)}
-                    <p className="text-center text-xs text-slate-400">Carregando seus chamados...</p>
-                  </div>
-                ) : filteredTickets.length === 0 ? (
-                  <div className="flex flex-col items-center px-6 py-14 text-center">
-                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600"><InboxIcon /></div>
-                    <h3 className="mt-4 text-sm font-bold text-slate-800">Nenhum chamado encontrado</h3>
-                    <p className="mt-1 max-w-sm text-sm leading-6 text-slate-500">
-                      {tickets.length === 0 ? 'Sua empresa ainda não possui solicitações. Abra o primeiro chamado para começar.' : 'Não encontramos resultados para sua pesquisa. Tente mudar o termo ou o filtro.'}
+          {loading ? (
+            <div className="p-8 text-center text-sm text-slate-500">
+              <Loader2 className="mr-2 inline animate-spin" size={17} />
+              Carregando chamados...
+            </div>
+          ) : filteredTickets.length === 0 ? (
+            <div className="p-10 text-center">
+              <Ticket size={30} className="mx-auto text-slate-300" />
+              <p className="mt-3 font-semibold">Nenhum chamado encontrado</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Quando sua empresa abrir um chamado, ele aparecerá aqui.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {filteredTickets.map((ticket) => (
+                <button
+                  key={ticket.id}
+                  onClick={() => {
+                    setSelectedTicket(ticket)
+                    setConversationError('')
+                    setConversationNotice('')
+                  }}
+                  className="flex w-full flex-col gap-3 p-5 text-left transition hover:bg-blue-50/50 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-blue-700">
+                      CHAMADO #{ticket.number ?? String(ticket.id).slice(0, 8)}
                     </p>
-                    {tickets.length === 0 && (
-                      <button type="button" onClick={openNewTicket} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"><Plus size={16} /> Abrir primeiro chamado</button>
+                    <p className="mt-1 truncate font-semibold">
+                      {ticket.subject}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      <CalendarDays size={13} className="mr-1 inline" />
+                      {dateTime(ticket.created_at)}
+                    </p>
+
+                    {ticket.attachments?.length > 0 && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        <Paperclip size={13} className="mr-1 inline" />
+                        {ticket.attachments.length} anexo(s) inicial(is)
+                      </p>
                     )}
                   </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[680px] text-left text-sm">
-                      <thead className="bg-slate-50/80 text-[10px] uppercase tracking-[0.13em] text-slate-400">
-                        <tr>
-                          <th className="px-6 py-3.5 font-bold">Solicitação</th>
-                          <th className="px-4 py-3.5 font-bold">Prioridade</th>
-                          <th className="px-4 py-3.5 font-bold">Status</th>
-                          <th className="px-6 py-3.5 font-bold">Data de abertura</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredTickets.map((ticket) => (
-                          <tr
-                            key={ticket.id}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={`Ver detalhes do chamado ${ticket.number ? `número ${ticket.number}` : ''} ${ticket.subject || ''}`}
-                            onClick={() => setSelectedTicket(ticket)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault()
-                                setSelectedTicket(ticket)
-                              }
-                            }}
-                            className="group cursor-pointer transition hover:bg-blue-50/60 focus-within:bg-blue-50/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
-                          >
-                            <td className="px-6 py-4">
-                              <div className="flex min-w-0 items-start gap-3">
-                                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition group-hover:bg-blue-100 group-hover:text-blue-700"><Ticket size={16} /></div>
-                                <div className="min-w-0">
-                                  <p className="text-xs font-semibold text-blue-700">#{ticket.number ?? String(ticket.id).slice(0, 8)}</p>
-                                  <p className="mt-1 max-w-[360px] truncate font-semibold text-slate-800 group-hover:text-blue-700">{ticket.subject}</p>
-                                  <p className="mt-1 text-[10px] font-medium text-slate-400 opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">Clique para ver detalhes</p>
-                                  {ticket.attachments?.length > 0 && (
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                      {ticket.attachments.map((attachment) => (
-                                        attachment.signed_url ? (
-                                          <a
-                                            key={attachment.id}
-                                            href={attachment.signed_url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            onClick={(event) => event.stopPropagation()}
-                                            title={attachment.file_name}
-                                            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
-                                          >
-                                            <Paperclip size={12} className="shrink-0" />
-                                            <span className="truncate">{attachment.file_name}</span>
-                                          </a>
-                                        ) : (
-                                          <span key={attachment.id} className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">
-                                            <Paperclip size={12} className="shrink-0" />
-                                            <span className="truncate">{attachment.file_name}</span>
-                                          </span>
-                                        )
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-4">
-                              <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${priorityClass(ticket.priority)}`}><span className={`h-1.5 w-1.5 rounded-full ${priorityClass(ticket.priority).includes('red') ? 'bg-red-500' : priorityClass(ticket.priority).includes('amber') ? 'bg-amber-500' : 'bg-slate-400'}`} />{priorityLabel(ticket.priority)}</span>
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-4">
-                              <span className={`inline-flex items-center rounded-full px-2.5 py-1.5 text-[11px] font-bold ${statusClass(ticket.status)}`}>{statusLabel(ticket.status)}</span>
-                            </td>
-                            <td className="whitespace-nowrap px-6 py-4 text-xs font-medium text-slate-500">
-                              <span className="flex items-center gap-2"><CalendarDays size={14} className="text-slate-400" />{formatDate(ticket.created_at)}</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {!loading && filteredTickets.length > 0 && (
-                  <div className="flex flex-col justify-between gap-2 border-t border-slate-100 bg-slate-50/50 px-6 py-3 text-xs text-slate-400 sm:flex-row sm:items-center">
-                    <span>Exibindo <strong className="text-slate-600">{filteredTickets.length}</strong> de <strong className="text-slate-600">{tickets.length}</strong> chamados</span>
-                    <span>Chamados vinculados à sua empresa</span>
-                  </div>
-                )}
-              </div>
 
-              <aside className="space-y-4">
-                <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02]">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600"><LifeBuoy size={20} /></div>
-                  <h3 className="mt-4 text-sm font-bold text-slate-900">Precisa de ajuda?</h3>
-                  <p className="mt-1.5 text-sm leading-6 text-slate-500">Nossa equipe está pronta para receber sua solicitação. Informe o máximo de detalhes possível para agilizar o atendimento.</p>
-                  <button type="button" onClick={openNewTicket} disabled={!currentCustomer || loading} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">Criar chamado <ArrowUpRight size={15} /></button>
-                </div>
-                <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50 p-5">
-                  <div className="flex items-center gap-2 text-blue-700"><CircleHelp size={17} /><span className="text-xs font-bold uppercase tracking-wider">Dica</span></div>
-                  <p className="mt-3 text-sm font-semibold leading-6 text-slate-800">Acompanhe o status por aqui</p>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">Os chamados da sua empresa ficam reunidos nesta área. Use a busca para localizar uma solicitação rapidamente.</p>
-                </div>
-                <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white px-4 py-3.5">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500"><Building2 size={16} /></div>
-                  <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Empresa vinculada</p><p className="truncate text-sm font-semibold text-slate-700">{company?.name || '—'}</p></div>
-                </div>
-              </aside>
-            </section>
-          </main>
+                  <div className="flex shrink-0 items-center gap-4">
+                    <span className={`text-xs font-semibold ${priorityStyle(ticket.priority)}`}>
+                      {priorityLabel(ticket.priority)}
+                    </span>
+
+                    <span className={`rounded-full px-3 py-1.5 text-xs font-bold ${statusStyle(ticket.status)}`}>
+                      {statusLabel(ticket.status)}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <div className="flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+          <ShieldCheck size={20} className="shrink-0" />
+          <p>
+            Os chamados exibidos pertencem à empresa{' '}
+            <strong>{company?.name || 'vinculada à sua conta'}</strong>.
+            As mensagens ficam no histórico do próprio chamado.
+          </p>
         </div>
-      </div>
+      </main>
 
-      {/* Modal de abertura */}
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm">
-          <div className="my-auto w-full max-w-xl overflow-hidden rounded-[24px] border border-white/50 bg-white shadow-2xl shadow-slate-950/20">
-            <div className="flex items-start justify-between border-b border-slate-100 bg-slate-50/70 px-6 py-5">
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Plus size={20} /></div>
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">Abrir novo chamado</h2>
-                  <p className="mt-1 text-sm text-slate-500">Conte para nossa equipe como podemos ajudar.</p>
-                </div>
+      {createOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-slate-950/60 p-3 backdrop-blur-sm">
+          <form
+            onSubmit={createTicket}
+            className="my-auto w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+          >
+            <div className="flex items-start justify-between border-b border-slate-100 p-5">
+              <div>
+                <h2 className="text-lg font-bold">Abrir novo chamado</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Conte para nossa equipe como podemos ajudar.
+                </p>
               </div>
-              <button type="button" onClick={closeModal} disabled={saving || Boolean(pendingTicket)} aria-label="Fechar" className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-50"><X size={19} /></button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!savingTicket && !pendingTicket) setCreateOpen(false)
+                }}
+                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"
+              >
+                <X size={20} />
+              </button>
             </div>
 
-            <form onSubmit={handleCreateTicket} className="space-y-5 px-6 py-6">
-              {error && (
-                <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><AlertCircle size={17} className="mt-0.5 shrink-0" /><span>{error}</span></div>
+            <div className="space-y-4 p-5">
+              {pageError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {pageError}
+                </div>
               )}
-              <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <Building2 size={17} className="shrink-0 text-slate-400" />
-                <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Empresa</p><p className="truncate text-sm font-semibold text-slate-700">{company?.name || '—'}</p></div>
+
+              <div className="rounded-xl bg-slate-50 p-3 text-sm">
+                <span className="text-slate-500">Empresa:</span>{' '}
+                <strong>{company?.name}</strong>
               </div>
 
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-slate-700">Assunto <span className="text-red-500">*</span></label>
+              <label className="block text-sm font-semibold">
+                Assunto *
                 <input
-                  required
-                  disabled={Boolean(pendingTicket)}
-                  maxLength={180}
                   value={form.subject}
-                  onChange={(event) => setForm({ ...form, subject: event.target.value })}
-                  placeholder="Ex.: Não consigo acessar o sistema"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
-                />
-                <p className="mt-1.5 text-right text-[11px] text-slate-400">{form.subject.length}/180</p>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-slate-700">Descrição <span className="text-red-500">*</span></label>
-                <textarea
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      subject: event.target.value,
+                    }))
+                  }
+                  maxLength={180}
                   required
-                  disabled={Boolean(pendingTicket)}
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 font-normal outline-none focus:border-blue-400"
+                  placeholder="Ex.: Erro ao acessar o sistema"
+                />
+              </label>
+
+              <label className="block text-sm font-semibold">
+                Descrição *
+                <textarea
+                  value={form.description}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      description: event.target.value,
+                    }))
+                  }
                   rows={5}
                   maxLength={10000}
-                  value={form.description}
-                  onChange={(event) => setForm({ ...form, description: event.target.value })}
-                  placeholder="Explique o que aconteceu, quais mensagens aparecem e o que você precisa."
-                  className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
+                  required
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 font-normal outline-none focus:border-blue-400"
+                  placeholder="Descreva o que aconteceu..."
                 />
-              </div>
+              </label>
 
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <label htmlFor="ticket-attachments-input" className="block text-sm font-semibold text-slate-700">Anexos</label>
-                  <span className="text-xs text-slate-400">Opcional</span>
-                </div>
-                <label
-                  htmlFor="ticket-attachments-input"
-                  className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-5 text-center transition ${pendingTicket ? 'border-slate-200 bg-slate-50' : 'border-blue-200 bg-blue-50/50 hover:border-blue-400 hover:bg-blue-50'}`}
-                >
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm"><UploadCloud size={20} /></span>
-                  <span className="mt-2 text-sm font-semibold text-slate-700">Clique para anexar imagens ou arquivos</span>
-                  <span className="mt-1 text-xs text-slate-500">Até {MAX_ATTACHMENT_FILES} arquivos · 10 MB por arquivo</span>
-                  <span className="mt-1 text-[11px] text-slate-400">JPG, PNG, WEBP, HEIC, PDF, DOC, DOCX, XLS, XLSX, PPT, CSV e TXT</span>
-                </label>
-                <input
-                  id="ticket-attachments-input"
-                  type="file"
-                  multiple
-                  accept={ACCEPTED_ATTACHMENT_EXTENSIONS}
-                  onChange={handleAttachmentSelection}
-                  disabled={saving || Boolean(pendingTicket)}
-                  className="sr-only"
-                />
-                {selectedFiles.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    {selectedFiles.map((file, index) => {
-                      const isImage = file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'].includes(fileExtension(file.name))
-                      const FileIcon = isImage ? ImageIcon : FileText
-                      return (
-                        <div key={`${file.name}-${file.lastModified}-${index}`} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500"><FileIcon size={17} /></div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs font-semibold text-slate-700">{file.name}</p>
-                            <p className="mt-0.5 text-[11px] text-slate-400">{formatFileSize(file.size)}</p>
-                          </div>
-                          {!pendingTicket && (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
-                              disabled={saving}
-                              aria-label={`Remover ${file.name}`}
-                              className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                            ><Trash2 size={15} /></button>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {pendingTicket && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  O chamado #{pendingTicket.number ?? pendingTicket.id} já foi registrado. Envie os anexos pendentes para concluir.
-                </div>
-              )}
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-slate-700">Prioridade</label>
+              <label className="block text-sm font-semibold">
+                Prioridade
                 <select
-                  disabled={Boolean(pendingTicket)}
                   value={form.priority}
-                  onChange={(event) => setForm({ ...form, priority: event.target.value })}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      priority: event.target.value,
+                    }))
+                  }
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 font-normal"
                 >
                   <option value="LOW">Baixa</option>
                   <option value="NORMAL">Normal</option>
                   <option value="HIGH">Alta</option>
                   <option value="URGENT">Urgente</option>
                 </select>
-              </div>
+              </label>
 
-              <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
-                <button type="button" onClick={closeModal} disabled={saving || Boolean(pendingTicket)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
-                <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
-                  {saving ? <><RefreshCw size={16} className="animate-spin" /> Enviando...</> : pendingTicket ? <><UploadCloud size={16} /> Tentar enviar anexos</> : <><Plus size={16} /> Enviar chamado</>}
-                </button>
+              <div>
+                <div className="mb-2 flex justify-between text-sm font-semibold">
+                  <span>Anexos</span>
+                  <span className="font-normal text-slate-400">
+                    Até 5 arquivos · 10 MB cada
+                  </span>
+                </div>
+
+                <label className="flex cursor-pointer flex-col items-center rounded-xl border border-dashed border-blue-300 bg-blue-50/50 p-5 text-center hover:bg-blue-50">
+                  <UploadCloud size={25} className="text-blue-600" />
+                  <span className="mt-2 text-sm font-semibold text-blue-700">
+                    Selecionar imagens ou documentos
+                  </span>
+                  <span className="mt-1 text-xs text-slate-500">
+                    JPG, PNG, PDF, Word, Excel, PowerPoint e TXT
+                  </span>
+                  <input
+                    type="file"
+                    multiple
+                    accept={ACCEPT}
+                    className="sr-only"
+                    onChange={(event) =>
+                      chooseFiles(
+                        event,
+                        setCreateFiles,
+                        createFiles,
+                        setPageError
+                      )
+                    }
+                  />
+                </label>
+
+                {createFiles.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {createFiles.map((file, index) => (
+                      <div
+                        key={`${file.name}-${index}`}
+                        className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs"
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <Paperclip size={14} />
+                          <span className="truncate">{file.name}</span>
+                          <span className="shrink-0 text-slate-400">
+                            {fileSize(file.size)}
+                          </span>
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCreateFiles((rows) =>
+                              rows.filter((_, i) => i !== index)
+                            )
+                          }
+                          className="ml-2 text-red-500"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </form>
-          </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50 p-4">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!savingTicket && !pendingTicket) setCreateOpen(false)
+                }}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold"
+              >
+                Cancelar
+              </button>
+
+              <button
+                disabled={savingTicket}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50"
+              >
+                {savingTicket && (
+                  <Loader2 size={16} className="animate-spin" />
+                )}
+                {pendingTicket ? 'Tentar enviar anexos' : 'Enviar chamado'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
-      {/* Modal de detalhes do chamado selecionado */}
       {selectedTicket && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-950/60 p-3 backdrop-blur-sm sm:p-5"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSelectedTicket(null)
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ticket-detail-title"
-            className="my-auto w-full max-w-2xl overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl shadow-slate-950/25"
-          >
-            <header className="flex items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/80 px-5 py-5 sm:px-7">
-              <div className="flex min-w-0 items-start gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-100 text-blue-700"><Ticket size={21} /></div>
-                <div className="min-w-0">
-                  <p className="text-xs font-bold uppercase tracking-wider text-blue-700">Chamado #{selectedTicket.number ?? String(selectedTicket.id).slice(0, 8)}</p>
-                  <h2 id="ticket-detail-title" className="mt-1 break-words text-lg font-bold text-slate-900">{selectedTicket.subject || 'Sem assunto'}</h2>
-                  <p className="mt-1 text-xs text-slate-500">Aberto em {formatDate(selectedTicket.created_at)}</p>
-                </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/60 p-2 backdrop-blur-sm sm:p-4">
+          <section className="my-auto flex max-h-[96vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <header className="flex items-start justify-between border-b border-slate-100 bg-slate-50 p-5">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-blue-700">
+                  Chamado #{selectedTicket.number ?? String(selectedTicket.id).slice(0, 8)}
+                </p>
+                <h2 className="mt-1 text-xl font-bold">{selectedTicket.subject}</h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Aberto em {dateTime(selectedTicket.created_at)}
+                </p>
               </div>
+
               <button
-                type="button"
                 onClick={() => setSelectedTicket(null)}
-                aria-label="Fechar detalhes do chamado"
-                className="shrink-0 rounded-xl p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
-              ><X size={19} /></button>
+                className="rounded-lg p-2 text-slate-400 hover:bg-slate-200"
+              >
+                <X size={20} />
+              </button>
             </header>
 
-            <div className="max-h-[min(72vh,680px)] space-y-5 overflow-y-auto px-5 py-6 sm:px-7">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Status</p>
-                  <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selectedTicket.status)}`}>{statusLabel(selectedTicket.status)}</span>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Prioridade</p>
-                  <p className={`mt-2 text-sm font-bold ${priorityClass(selectedTicket.priority)}`}>{priorityLabel(selectedTicket.priority)}</p>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Empresa</p>
-                  <p className="mt-2 truncate text-sm font-semibold text-slate-700">{company?.name || '—'}</p>
-                </div>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+              <div className="flex flex-wrap gap-2">
+                <span className={`rounded-full px-3 py-1.5 text-xs font-bold ${statusStyle(selectedTicket.status)}`}>
+                  {statusLabel(selectedTicket.status)}
+                </span>
+                <span className={`rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold ${priorityStyle(selectedTicket.priority)}`}>
+                  Prioridade: {priorityLabel(selectedTicket.priority)}
+                </span>
               </div>
 
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Descrição da solicitação</h3>
-                <div className="mt-2 min-h-24 whitespace-pre-wrap break-words rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm leading-7 text-slate-700">{selectedTicket.description || 'Nenhuma descrição informada.'}</div>
-              </div>
+              <div className="rounded-xl border border-slate-200 p-4">
+                <p className="text-xs font-bold uppercase text-slate-400">
+                  Descrição inicial
+                </p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                  {selectedTicket.description}
+                </p>
 
-              <div>
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-bold text-slate-900">Arquivos anexados</h3>
-                  <span className="text-xs text-slate-400">{selectedTicket.attachments?.length || 0} arquivo(s)</span>
-                </div>
-                {selectedTicket.attachments?.length ? (
+                {initialAttachments.length > 0 && (
                   <div className="mt-3 space-y-2">
-                    {selectedTicket.attachments.map((attachment) => {
-                      const isImage = String(attachment.mime_type || '').startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'].includes(fileExtension(attachment.file_name))
-                      return (
-                        <div key={attachment.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">{isImage ? <ImageIcon size={19} /> : <FileText size={19} />}</div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-slate-800">{attachment.file_name}</p>
-                            <p className="mt-0.5 text-xs text-slate-400">{formatFileSize(Number(attachment.file_size))}</p>
-                          </div>
-                          {attachment.signed_url ? (
-                            <a
-                              href={attachment.signed_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:border-blue-200 hover:bg-blue-50"
-                            >Abrir arquivo</a>
-                          ) : (
-                            <span className="shrink-0 text-xs text-slate-400">Indisponível</span>
-                          )}
-                        </div>
-                      )
-                    })}
+                    {initialAttachments.map((file) => (
+                      <Attachment key={file.id} file={file} />
+                    ))}
                   </div>
-                ) : (
-                  <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">Este chamado não possui arquivos anexados.</div>
                 )}
               </div>
 
-              <div className="border-t border-slate-100 pt-5">
-                <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900"><MessageSquare size={17} className="text-blue-600" /> Conversa do chamado</h3>
-                    <p className="mt-1 text-xs text-slate-500">Troque mensagens com a equipe responsável por esta solicitação.</p>
+                    <h3 className="flex items-center gap-2 font-bold">
+                      <MessageSquare size={17} className="text-blue-600" />
+                      Conversa do chamado
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Cliente e equipe podem responder nesta conversa.
+                    </p>
                   </div>
-                  <button type="button" onClick={() => loadConversation(selectedTicket.id)} disabled={conversationLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">{conversationLoading ? 'Atualizando...' : 'Atualizar'}</button>
+
+                  <button
+                    onClick={() => loadConversation(selectedTicket.id)}
+                    disabled={conversationLoading}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold"
+                  >
+                    {conversationLoading ? 'Atualizando...' : 'Atualizar'}
+                  </button>
                 </div>
 
-                {conversationError && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{conversationError}</div>}
-                {conversationNotice && <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{conversationNotice}</div>}
+                {conversationError && (
+                  <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    {conversationError}
+                  </div>
+                )}
 
-                <div className="mt-4 max-h-80 space-y-3 overflow-y-auto rounded-2xl bg-slate-50 p-3 sm:p-4">
-                  <div className="max-w-[92%] rounded-2xl rounded-tl-md border border-slate-200 bg-white p-3.5 shadow-sm">
-                    <div className="flex items-center gap-2 text-xs font-bold text-slate-700"><UserRound size={14} /> Você · Solicitação inicial</div>
-                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{selectedTicket.description || 'Nenhuma descrição informada.'}</p>
+                {conversationNotice && (
+                  <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+                    {conversationNotice}
+                  </div>
+                )}
+
+                <div className="mt-4 max-h-80 space-y-3 overflow-y-auto rounded-xl bg-slate-50 p-3">
+                  <div className="max-w-[90%] rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">
+                      Você · Solicitação inicial
+                    </p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                      {selectedTicket.description}
+                    </p>
                   </div>
 
-                  {conversationLoading && conversationMessages.length === 0 && <div className="py-5 text-center text-xs text-slate-400">Carregando conversa...</div>}
-                  {!conversationLoading && conversationMessages.length === 0 && <div className="py-3 text-center text-xs text-slate-400">Ainda não há respostas. A equipe receberá sua mensagem por aqui.</div>}
-                  {conversationMessages.map((message) => {
-                    const isCustomer = message.sender_type === 'CUSTOMER'
+                  {conversationLoading && messages.length === 0 && (
+                    <p className="py-4 text-center text-xs text-slate-400">
+                      Carregando conversa...
+                    </p>
+                  )}
+
+                  {messages.map((message) => {
+                    const own = message.sender_type === 'CUSTOMER'
+
                     return (
-                      <div key={message.id} className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[92%] rounded-2xl p-3.5 shadow-sm ${isCustomer ? 'rounded-tr-md bg-blue-600 text-white' : 'rounded-tl-md border border-slate-200 bg-white text-slate-800'}`}>
-                          <div className={`flex items-center gap-2 text-xs font-bold ${isCustomer ? 'text-blue-100' : 'text-slate-500'}`}>
-                            {isCustomer ? <UserRound size={14} /> : <Headphones size={14} />}
-                            {isCustomer ? 'Você' : 'Equipe de atendimento'}
-                            <span className={`font-normal ${isCustomer ? 'text-blue-100/80' : 'text-slate-400'}`}>· {formatDate(message.created_at)}</span>
-                          </div>
-                          <p className={`mt-2 whitespace-pre-wrap break-words text-sm leading-6 ${isCustomer ? 'text-white' : 'text-slate-700'}`}>{message.body}</p>
-                          {message.attachments?.length > 0 && (
-                            <div className="mt-3 space-y-2">
-                              {message.attachments.map((attachment) => (
-                                <div key={attachment.id} className={`flex items-center gap-2 rounded-xl p-2 ${isCustomer ? 'bg-blue-700/70' : 'bg-slate-50'}`}>
-                                  {String(attachment.mime_type || '').startsWith('image/') ? <ImageIcon size={16} /> : <FileText size={16} />}
-                                  <span className="min-w-0 flex-1 truncate text-xs">{attachment.file_name}</span>
-                                  {attachment.signed_url ? <a href={attachment.signed_url} target="_blank" rel="noreferrer" className={`text-xs font-bold underline ${isCustomer ? 'text-white' : 'text-blue-700'}`}>Abrir</a> : <span className="text-xs opacity-70">Indisponível</span>}
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                      <div
+                        key={message.id}
+                        className={`flex ${own ? 'justify-end' : 'justify-start'}`}
+                      >
+                        <div
+                          className={`max-w-[90%] rounded-xl p-3 ${
+                            own
+                              ? 'bg-blue-600 text-white'
+                              : 'border border-slate-200 bg-white text-slate-800'
+                          }`}
+                        >
+                          <p className={`text-xs font-bold ${own ? 'text-blue-100' : 'text-slate-500'}`}>
+                            {own ? 'Você' : 'Equipe de atendimento'} · {dateTime(message.created_at)}
+                          </p>
+
+                          <p className="mt-2 whitespace-pre-wrap break-words text-sm">
+                            {message.message}
+                          </p>
+
+                          {message.attachments?.map((file) => (
+                            <Attachment
+                              key={file.id}
+                              file={file}
+                              inverse={own}
+                            />
+                          ))}
                         </div>
                       </div>
                     )
                   })}
+
+                  {!conversationLoading && messages.length === 0 && (
+                    <p className="py-3 text-center text-xs text-slate-400">
+                      Ainda não há respostas da equipe.
+                    </p>
+                  )}
                 </div>
 
-                {isFinalizedTicket(selectedTicket.status) ? (
-                  <div className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"><LockKeyhole size={17} className="mt-0.5 shrink-0" /> Este chamado foi finalizado. A conversa está disponível para consulta, mas não aceita novas mensagens.</div>
+                {selectedTicket.status === 'CLOSED' ? (
+                  <div className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">
+                    Este chamado foi finalizado. A conversa está disponível apenas para consulta.
+                  </div>
                 ) : (
-                  <form onSubmit={handleSendMessage} className="mt-4 space-y-3">
-                    <textarea value={messageDraft} onChange={(event) => setMessageDraft(event.target.value)} rows={3} maxLength={10000} placeholder="Escreva sua resposta para a equipe..." className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10" />
+                  <form
+                    onSubmit={sendCustomerMessage}
+                    className="mt-4 space-y-3"
+                  >
+                    <textarea
+                      value={messageText}
+                      onChange={(event) => setMessageText(event.target.value)}
+                      maxLength={10000}
+                      rows={3}
+                      placeholder="Escreva sua resposta para a equipe..."
+                      className="w-full rounded-xl border border-slate-200 p-3 text-sm outline-none focus:border-blue-400"
+                    />
+
                     {messageFiles.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {messageFiles.map((file, index) => <span key={`${file.name}-${index}`} className="inline-flex max-w-full items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600"><Paperclip size={13} /><span className="max-w-44 truncate">{file.name}</span><button type="button" onClick={() => setMessageFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="font-bold text-red-500">×</button></span>)}
+                      <div className="space-y-1">
+                        {messageFiles.map((file, index) => (
+                          <div
+                            key={`${file.name}-${index}`}
+                            className="flex items-center justify-between text-xs"
+                          >
+                            <span className="truncate">
+                              {file.name} · {fileSize(file.size)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setMessageFiles((rows) =>
+                                  rows.filter((_, i) => i !== index)
+                                )
+                              }
+                              className="text-red-500"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        ))}
                       </div>
                     )}
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"><Paperclip size={15} /> Anexar arquivo<input type="file" multiple accept={ACCEPTED_ATTACHMENT_EXTENSIONS} onChange={handleMessageFileSelection} className="sr-only" disabled={sendingMessage} /></label>
-                      <button type="submit" disabled={sendingMessage || (!messageDraft.trim() && messageFiles.length === 0)} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{sendingMessage ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Enviar resposta</button>
+
+                    <div className="flex flex-wrap justify-between gap-2">
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold">
+                        <Paperclip size={15} />
+                        Anexar arquivo
+                        <input
+                          type="file"
+                          multiple
+                          accept={ACCEPT}
+                          className="sr-only"
+                          onChange={(event) =>
+                            chooseFiles(
+                              event,
+                              setMessageFiles,
+                              messageFiles
+                            )
+                          }
+                        />
+                      </label>
+
+                      <button
+                        type="submit"
+                        disabled={
+                          sendingMessage ||
+                          (!messageText.trim() && !messageFiles.length)
+                        }
+                        className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"
+                      >
+                        {sendingMessage ? (
+                          <Loader2 size={15} className="animate-spin" />
+                        ) : (
+                          <Send size={15} />
+                        )}
+                        Enviar resposta
+                      </button>
                     </div>
                   </form>
                 )}
               </div>
             </div>
 
-            <footer className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-7">
-              <div>
-                {!isFinalizedTicket(selectedTicket.status) ? (
-                  <button type="button" onClick={handleCustomerCloseTicket} disabled={closingTicket} className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">{closingTicket ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} Finalizar chamado</button>
-                ) : <span className="text-xs font-semibold text-emerald-700">Chamado finalizado</span>}
-              </div>
-              <button type="button" onClick={() => setSelectedTicket(null)} className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700">Fechar</button>
+            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50 p-4">
+              {selectedTicket.status !== 'CLOSED' ? (
+                <button
+                  onClick={finishTicket}
+                  disabled={closingTicket}
+                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 disabled:opacity-50"
+                >
+                  {closingTicket ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <CheckCircle2 size={15} />
+                  )}
+                  Finalizar chamado
+                </button>
+              ) : (
+                <span className="text-sm font-semibold text-emerald-700">
+                  Chamado finalizado
+                </span>
+              )}
+
+              <button
+                onClick={() => setSelectedTicket(null)}
+                className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white"
+              >
+                Fechar
+              </button>
             </footer>
           </section>
         </div>
+      )}
+    </div>
+  )
+}
+
+function Stat({ icon, label, value }) {
+  return (
+    <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+          {icon}
+        </span>
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-400">
+          {label}
+        </span>
+      </div>
+      <p className="mt-4 text-3xl font-bold">{value}</p>
+    </article>
+  )
+}
+
+function Attachment({ file, inverse = false }) {
+  const isImage = String(file.mime_type || '').startsWith('image/')
+
+  return (
+    <div
+      className={`mt-2 flex items-center gap-2 rounded-lg p-2 ${
+        inverse
+          ? 'bg-blue-700/70 text-white'
+          : 'border border-slate-200 bg-slate-50 text-slate-700'
+      }`}
+    >
+      <span>
+        {isImage ? <ImageIcon size={16} /> : <FileText size={16} />}
+      </span>
+
+      <span className="min-w-0 flex-1 truncate text-xs">
+        {file.file_name} ({fileSize(file.file_size)})
+      </span>
+
+      {file.signed_url ? (
+        <a
+          href={file.signed_url}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 text-xs font-bold underline"
+        >
+          Abrir
+        </a>
+      ) : (
+        <span className="text-xs opacity-60">Indisponível</span>
       )}
     </div>
   )
