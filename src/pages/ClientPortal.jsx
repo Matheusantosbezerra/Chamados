@@ -32,7 +32,7 @@ import { supabase } from '../lib/supabase'
 const initialForm = {
   subject: '',
   description: '',
-  priority: 'normal',
+  priority: 'NORMAL',
 }
 
 const ATTACHMENTS_BUCKET = 'ticket-attachments'
@@ -110,9 +110,9 @@ function statusClass(status) {
 
 function priorityLabel(priority) {
   const value = normalize(priority)
-  if (value === 'alta' || value === 'high' || value === 'urgent' || value === 'urgente') return 'Alta'
+  if (value === 'urgent' || value === 'urgente') return 'Urgente'
+  if (value === 'alta' || value === 'high') return 'Alta'
   if (value === 'baixa' || value === 'low') return 'Baixa'
-  if (value === 'medium' || value === 'media' || value === 'média') return 'Média'
   return 'Normal'
 }
 
@@ -886,9 +886,10 @@ export default function ClientPortal() {
                   onChange={(event) => setForm({ ...form, priority: event.target.value })}
                   className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
                 >
-                  <option value="baixa">Baixa</option>
-                  <option value="normal">Normal</option>
-                  <option value="alta">Alta</option>
+                  <option value="LOW">Baixa</option>
+                  <option value="NORMAL">Normal</option>
+                  <option value="HIGH">Alta</option>
+                  <option value="URGENT">Urgente</option>
                 </select>
               </div>
 
