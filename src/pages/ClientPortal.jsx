@@ -20,6 +20,11 @@ import {
   Sparkles,
   ArrowUpRight,
   CircleHelp,
+  Paperclip,
+  UploadCloud,
+  FileText,
+  Image as ImageIcon,
+  Trash2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
@@ -28,6 +33,42 @@ const initialForm = {
   subject: '',
   description: '',
   priority: 'normal',
+}
+
+const ATTACHMENTS_BUCKET = 'ticket-attachments'
+const MAX_ATTACHMENT_FILES = 5
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+const ACCEPTED_ATTACHMENT_EXTENSIONS = '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.ppt,.pptx,.odt,.ods'
+const MIME_BY_EXTENSION = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+  heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf', doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv', txt: 'text/plain', ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet',
+}
+
+function fileExtension(name) {
+  return String(name || '').split('.').pop()?.toLowerCase() || ''
+}
+
+function attachmentMimeType(file) {
+  const extension = fileExtension(file.name)
+  return MIME_BY_EXTENSION[extension] || file.type || 'application/octet-stream'
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes)) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function safeStorageFileName(name) {
+  return String(name || 'arquivo').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 120) || 'arquivo'
 }
 
 function normalize(value) {
@@ -114,6 +155,8 @@ export default function ClientPortal() {
   const [tickets, setTickets] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState(initialForm)
+  const [selectedFiles, setSelectedFiles] = useState([])
+  const [pendingTicket, setPendingTicket] = useState(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
 
@@ -172,7 +215,43 @@ export default function ClientPortal() {
         .order('created_at', { ascending: false })
 
       if (ticketsError) throw ticketsError
-      setTickets(ticketData || [])
+
+      // Carrega os metadados dos anexos e gera links temporários do bucket privado.
+      const ticketIds = (ticketData || []).map((ticket) => ticket.id)
+      let attachmentsByTicket = {}
+      if (ticketIds.length) {
+        const { data: attachmentRows, error: attachmentError } = await supabase
+          .from('ticket_attachments')
+          .select('id, ticket_id, file_name, storage_path, mime_type, file_size, created_at')
+          .in('ticket_id', ticketIds)
+          .order('created_at', { ascending: true })
+
+        if (attachmentError) {
+          console.warn('Não foi possível carregar os anexos dos chamados:', attachmentError)
+          setError('Os chamados foram carregados, mas não foi possível consultar os anexos. Verifique se o SQL de anexos foi executado no Supabase.')
+        } else {
+          const attachmentsWithUrls = await Promise.all((attachmentRows || []).map(async (attachment) => {
+            const { data: signedData, error: signedError } = await supabase.storage
+              .from(ATTACHMENTS_BUCKET)
+              .createSignedUrl(attachment.storage_path, 60 * 60)
+            if (signedError) {
+              console.warn('Não foi possível gerar o link do anexo:', signedError)
+              return { ...attachment, signed_url: null }
+            }
+            return { ...attachment, signed_url: signedData?.signedUrl || null }
+          }))
+          attachmentsByTicket = attachmentsWithUrls.reduce((acc, attachment) => {
+            if (!acc[attachment.ticket_id]) acc[attachment.ticket_id] = []
+            acc[attachment.ticket_id].push(attachment)
+            return acc
+          }, {})
+        }
+      }
+
+      setTickets((ticketData || []).map((ticket) => ({
+        ...ticket,
+        attachments: attachmentsByTicket[ticket.id] || [],
+      })))
     } catch (err) {
       console.error('Erro ao carregar Portal do Cliente:', err)
       setError(errorMessage(err))
@@ -207,6 +286,8 @@ export default function ClientPortal() {
 
   function openNewTicket() {
     setForm(initialForm)
+    setSelectedFiles([])
+    setPendingTicket(null)
     setError('')
     setSuccess('')
     setModalOpen(true)
@@ -214,8 +295,95 @@ export default function ClientPortal() {
 
   function closeModal() {
     if (saving) return
+    if (pendingTicket) {
+      setError('Este chamado já foi criado. Envie os anexos pendentes antes de fechar esta janela.')
+      return
+    }
     setModalOpen(false)
     setForm(initialForm)
+    setSelectedFiles([])
+  }
+
+  function handleAttachmentSelection(event) {
+    const incomingFiles = Array.from(event.target.files || [])
+    event.target.value = ''
+    if (!incomingFiles.length) return
+
+    const nextFiles = [...selectedFiles]
+    for (const file of incomingFiles) {
+      const extension = fileExtension(file.name)
+      if (!MIME_BY_EXTENSION[extension]) {
+        setError(`O arquivo \"${file.name}\" não tem um formato permitido. Envie imagens, PDF, Word, Excel, PowerPoint ou arquivos de texto.`)
+        return
+      }
+      if (file.size <= 0) {
+        setError(`O arquivo \"${file.name}\" está vazio e não pode ser anexado.`)
+        return
+      }
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        setError(`O arquivo \"${file.name}\" ultrapassa o limite de 10 MB.`)
+        return
+      }
+      if (nextFiles.length >= MAX_ATTACHMENT_FILES) {
+        setError(`Você pode anexar no máximo ${MAX_ATTACHMENT_FILES} arquivos por chamado.`)
+        return
+      }
+      if (!nextFiles.some((existing) => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified)) {
+        nextFiles.push(file)
+      }
+    }
+
+    setSelectedFiles(nextFiles)
+    setError('')
+  }
+
+  async function uploadTicketAttachments(ticket, filesToUpload, userId) {
+    if (!filesToUpload.length) return
+
+    const uploadedPaths = []
+    try {
+      const metadata = []
+      for (const file of filesToUpload) {
+        const safeName = safeStorageFileName(file.name)
+        const uniquePart = typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        const storagePath = `${currentCustomer.organization_id}/${currentCustomer.client_company_id}/${ticket.id}/${uniquePart}-${safeName}`
+        const mimeType = attachmentMimeType(file)
+
+        const { error: uploadError } = await supabase.storage
+          .from(ATTACHMENTS_BUCKET)
+          .upload(storagePath, file, {
+            cacheControl: '3600',
+            contentType: mimeType,
+            upsert: false,
+          })
+        if (uploadError) throw uploadError
+
+        uploadedPaths.push(storagePath)
+        metadata.push({
+          ticket_id: ticket.id,
+          organization_id: currentCustomer.organization_id,
+          client_company_id: currentCustomer.client_company_id,
+          uploaded_by: userId,
+          file_name: file.name,
+          storage_path: storagePath,
+          mime_type: mimeType,
+          file_size: file.size,
+        })
+      }
+
+      const { error: metadataError } = await supabase
+        .from('ticket_attachments')
+        .insert(metadata)
+      if (metadataError) throw metadataError
+    } catch (uploadError) {
+      if (uploadedPaths.length) {
+        const { error: cleanupError } = await supabase.storage.from(ATTACHMENTS_BUCKET).remove(uploadedPaths)
+        if (cleanupError) console.warn('Falha ao remover arquivos enviados parcialmente:', cleanupError)
+      }
+      throw uploadError
+    }
   }
 
   async function handleCreateTicket(event) {
@@ -230,34 +398,61 @@ export default function ClientPortal() {
 
     const subject = form.subject.trim()
     const description = form.description.trim()
-    if (!subject) return setError('Informe o assunto do chamado.')
-    if (!description) return setError('Descreva o problema ou solicitação.')
-    if (subject.length > 180) return setError('O assunto deve ter no máximo 180 caracteres.')
+    if (!pendingTicket && !subject) return setError('Informe o assunto do chamado.')
+    if (!pendingTicket && !description) return setError('Descreva o problema ou solicitação.')
+    if (!pendingTicket && subject.length > 180) return setError('O assunto deve ter no máximo 180 caracteres.')
+    if (!pendingTicket && selectedFiles.length > MAX_ATTACHMENT_FILES) return setError(`Você pode anexar no máximo ${MAX_ATTACHMENT_FILES} arquivos por chamado.`)
 
     setSaving(true)
+    let ticketBeingCreatedOrRetried = pendingTicket
 
     try {
-      const { error: insertError } = await supabase
-        .from('tickets')
-        .insert({
-          organization_id: currentCustomer.organization_id,
-          client_company_id: currentCustomer.client_company_id,
-          customer_id: currentCustomer.id,
-          subject,
-          description,
-          priority: form.priority,
-          status: 'aberto',
-        })
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) throw authError
+      if (!authData.user) throw new Error('Sua sessão expirou. Entre novamente.')
 
-      if (insertError) throw insertError
+      if (!ticketBeingCreatedOrRetried) {
+        const { data: createdTicket, error: insertError } = await supabase
+          .from('tickets')
+          .insert({
+            organization_id: currentCustomer.organization_id,
+            client_company_id: currentCustomer.client_company_id,
+            customer_id: currentCustomer.id,
+            subject,
+            description,
+            priority: form.priority,
+            status: 'aberto',
+          })
+          .select('id, number')
+          .single()
 
+        if (insertError) throw insertError
+        if (!createdTicket?.id) throw new Error('O chamado foi enviado, mas o banco não retornou seu identificador. Atualize a página antes de tentar novamente.')
+        ticketBeingCreatedOrRetried = createdTicket
+        if (selectedFiles.length) setPendingTicket(createdTicket)
+      }
+
+      if (selectedFiles.length) {
+        await uploadTicketAttachments(ticketBeingCreatedOrRetried, selectedFiles, authData.user.id)
+      }
+
+      const wasRetry = Boolean(pendingTicket)
+      setPendingTicket(null)
       setModalOpen(false)
       setForm(initialForm)
-      setSuccess('Chamado aberto com sucesso! Nossa equipe foi notificada pelo sistema.')
+      setSelectedFiles([])
+      setSuccess(wasRetry
+        ? `Anexos enviados com sucesso para o chamado #${ticketBeingCreatedOrRetried.number ?? ticketBeingCreatedOrRetried.id}.`
+        : `Chamado #${ticketBeingCreatedOrRetried.number ?? ticketBeingCreatedOrRetried.id} aberto com sucesso${selectedFiles.length ? ' e anexos enviados' : ''}!`)
       await loadPortal()
     } catch (err) {
-      console.error('Erro ao abrir chamado:', err)
-      setError(errorMessage(err))
+      console.error('Erro ao abrir chamado ou enviar anexos:', err)
+      if (ticketBeingCreatedOrRetried) {
+        setPendingTicket(ticketBeingCreatedOrRetried)
+        setError(`O chamado #${ticketBeingCreatedOrRetried.number ?? ticketBeingCreatedOrRetried.id} já foi criado, mas não foi possível concluir o envio dos anexos. Seus arquivos continuam selecionados. Clique em “Tentar enviar anexos” para repetir sem criar outro chamado. Detalhe: ${errorMessage(err)}`)
+      } else {
+        setError(errorMessage(err))
+      }
     } finally {
       setSaving(false)
     }
@@ -502,6 +697,30 @@ export default function ClientPortal() {
                                 <div className="min-w-0">
                                   <p className="text-xs font-semibold text-blue-700">#{ticket.number ?? String(ticket.id).slice(0, 8)}</p>
                                   <p className="mt-1 max-w-[360px] truncate font-semibold text-slate-800">{ticket.subject}</p>
+                                  {ticket.attachments?.length > 0 && (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {ticket.attachments.map((attachment) => (
+                                        attachment.signed_url ? (
+                                          <a
+                                            key={attachment.id}
+                                            href={attachment.signed_url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            title={attachment.file_name}
+                                            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+                                          >
+                                            <Paperclip size={12} className="shrink-0" />
+                                            <span className="truncate">{attachment.file_name}</span>
+                                          </a>
+                                        ) : (
+                                          <span key={attachment.id} className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">
+                                            <Paperclip size={12} className="shrink-0" />
+                                            <span className="truncate">{attachment.file_name}</span>
+                                          </span>
+                                        )
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </td>
@@ -562,7 +781,7 @@ export default function ClientPortal() {
                   <p className="mt-1 text-sm text-slate-500">Conte para nossa equipe como podemos ajudar.</p>
                 </div>
               </div>
-              <button type="button" onClick={closeModal} disabled={saving} aria-label="Fechar" className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-50"><X size={19} /></button>
+              <button type="button" onClick={closeModal} disabled={saving || Boolean(pendingTicket)} aria-label="Fechar" className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-50"><X size={19} /></button>
             </div>
 
             <form onSubmit={handleCreateTicket} className="space-y-5 px-6 py-6">
@@ -578,6 +797,7 @@ export default function ClientPortal() {
                 <label className="mb-2 block text-sm font-semibold text-slate-700">Assunto <span className="text-red-500">*</span></label>
                 <input
                   required
+                  disabled={Boolean(pendingTicket)}
                   maxLength={180}
                   value={form.subject}
                   onChange={(event) => setForm({ ...form, subject: event.target.value })}
@@ -591,6 +811,7 @@ export default function ClientPortal() {
                 <label className="mb-2 block text-sm font-semibold text-slate-700">Descrição <span className="text-red-500">*</span></label>
                 <textarea
                   required
+                  disabled={Boolean(pendingTicket)}
                   rows={5}
                   maxLength={10000}
                   value={form.description}
@@ -601,8 +822,66 @@ export default function ClientPortal() {
               </div>
 
               <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <label htmlFor="ticket-attachments-input" className="block text-sm font-semibold text-slate-700">Anexos</label>
+                  <span className="text-xs text-slate-400">Opcional</span>
+                </div>
+                <label
+                  htmlFor="ticket-attachments-input"
+                  className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-5 text-center transition ${pendingTicket ? 'border-slate-200 bg-slate-50' : 'border-blue-200 bg-blue-50/50 hover:border-blue-400 hover:bg-blue-50'}`}
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm"><UploadCloud size={20} /></span>
+                  <span className="mt-2 text-sm font-semibold text-slate-700">Clique para anexar imagens ou arquivos</span>
+                  <span className="mt-1 text-xs text-slate-500">Até {MAX_ATTACHMENT_FILES} arquivos · 10 MB por arquivo</span>
+                  <span className="mt-1 text-[11px] text-slate-400">JPG, PNG, WEBP, HEIC, PDF, DOC, DOCX, XLS, XLSX, PPT, CSV e TXT</span>
+                </label>
+                <input
+                  id="ticket-attachments-input"
+                  type="file"
+                  multiple
+                  accept={ACCEPTED_ATTACHMENT_EXTENSIONS}
+                  onChange={handleAttachmentSelection}
+                  disabled={saving || Boolean(pendingTicket)}
+                  className="sr-only"
+                />
+                {selectedFiles.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {selectedFiles.map((file, index) => {
+                      const isImage = file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'].includes(fileExtension(file.name))
+                      const FileIcon = isImage ? ImageIcon : FileText
+                      return (
+                        <div key={`${file.name}-${file.lastModified}-${index}`} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500"><FileIcon size={17} /></div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-semibold text-slate-700">{file.name}</p>
+                            <p className="mt-0.5 text-[11px] text-slate-400">{formatFileSize(file.size)}</p>
+                          </div>
+                          {!pendingTicket && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                              disabled={saving}
+                              aria-label={`Remover ${file.name}`}
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                            ><Trash2 size={15} /></button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {pendingTicket && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  O chamado #{pendingTicket.number ?? pendingTicket.id} já foi registrado. Envie os anexos pendentes para concluir.
+                </div>
+              )}
+
+              <div>
                 <label className="mb-2 block text-sm font-semibold text-slate-700">Prioridade</label>
                 <select
+                  disabled={Boolean(pendingTicket)}
                   value={form.priority}
                   onChange={(event) => setForm({ ...form, priority: event.target.value })}
                   className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
@@ -614,9 +893,9 @@ export default function ClientPortal() {
               </div>
 
               <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
-                <button type="button" onClick={closeModal} disabled={saving} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
+                <button type="button" onClick={closeModal} disabled={saving || Boolean(pendingTicket)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
                 <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
-                  {saving ? <><RefreshCw size={16} className="animate-spin" /> Enviando...</> : <><Plus size={16} /> Enviar chamado</>}
+                  {saving ? <><RefreshCw size={16} className="animate-spin" /> Enviando...</> : pendingTicket ? <><UploadCloud size={16} /> Tentar enviar anexos</> : <><Plus size={16} /> Enviar chamado</>}
                 </button>
               </div>
             </form>
