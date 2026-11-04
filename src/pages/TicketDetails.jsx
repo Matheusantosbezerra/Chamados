@@ -6,16 +6,20 @@ import {
   CalendarDays,
   CheckCircle2,
   FileText,
+  Headphones,
   Image as ImageIcon,
   Loader2,
-  LockKeyhole,
   MessageSquare,
   Paperclip,
   RefreshCw,
   Send,
   Ticket,
   UserRound,
+  UploadCloud,
+  X,
+  AlertCircle,
 } from 'lucide-react'
+
 import { supabase } from '../lib/supabase'
 
 const BUCKET = 'ticket-attachments'
@@ -54,71 +58,136 @@ const STATUSES = [
   { value: 'CLOSED', label: 'Fechado' },
 ]
 
-function ext(name) {
+function getExtension(name) {
   return String(name || '').split('.').pop()?.toLowerCase() || ''
 }
 
-function safeName(name) {
+function safeFileName(name) {
   return String(name || 'arquivo')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
     .slice(0, 120) || 'arquivo'
 }
 
-function dateTime(value) {
+function formatDate(value) {
   if (!value) return '—'
 
   const date = new Date(value)
 
-  return Number.isNaN(date.getTime())
-    ? '—'
-    : date.toLocaleString('pt-BR', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-      })
+  if (Number.isNaN(date.getTime())) return '—'
+
+  return date.toLocaleString('pt-BR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  })
 }
 
-function sizeLabel(value) {
-  const bytes = Number(value)
+function formatSize(bytes) {
+  const value = Number(bytes)
 
-  if (!Number.isFinite(bytes)) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  if (!Number.isFinite(value)) return ''
 
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (value < 1024) return `${value} B`
+
+  if (value < 1024 * 1024) {
+    return `${Math.round(value / 1024)} KB`
+  }
+
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function statusLabel(value) {
-  return STATUSES.find((item) => item.value === value)?.label || value || 'Aberto'
+function statusLabel(status) {
+  return STATUSES.find((item) => item.value === status)?.label || status
 }
 
-function priorityLabel(value) {
-  return ({
+function priorityLabel(priority) {
+  return {
     LOW: 'Baixa',
     NORMAL: 'Normal',
     HIGH: 'Alta',
     URGENT: 'Urgente',
-  })[value] || value || 'Normal'
+  }[priority] || 'Normal'
 }
 
-function errorText(error) {
+function priorityStyle(priority) {
+  if (priority === 'URGENT') return 'text-red-600'
+  if (priority === 'HIGH') return 'text-orange-600'
+  if (priority === 'LOW') return 'text-slate-500'
+
+  return 'text-amber-600'
+}
+
+function statusStyle(status) {
+  if (status === 'CLOSED' || status === 'RESOLVED') {
+    return 'bg-emerald-50 text-emerald-700'
+  }
+
+  if (status === 'WAITING_CUSTOMER') {
+    return 'bg-violet-50 text-violet-700'
+  }
+
+  if (status === 'IN_PROGRESS') {
+    return 'bg-amber-50 text-amber-700'
+  }
+
+  return 'bg-blue-50 text-blue-700'
+}
+
+function readableError(error) {
   if (!error) return 'Ocorreu um erro inesperado.'
 
   if (error.code === '42501') {
-    return 'Operação bloqueada pelas políticas de acesso (RLS). Confira as permissões da equipe.'
+    return 'Operação bloqueada pelas permissões do Supabase (RLS).'
+  }
+
+  if (error.code === '23514') {
+    return `Valor rejeitado por uma regra do banco: ${error.message}`
   }
 
   if (error.code === '23502') {
     return `Campo obrigatório ausente: ${error.message}`
   }
 
-  if (error.code === '23514') {
-    return `Valor rejeitado por uma regra da tabela: ${error.message}`
-  }
-
   return error.message || 'Não foi possível concluir a operação.'
+}
+
+function Attachment({ file, inverse = false }) {
+  const isImage = String(file.mime_type || '').startsWith('image/')
+
+  return (
+    <div
+      className={`mt-2 flex items-center gap-2 rounded-lg p-2 ${
+        inverse
+          ? 'bg-blue-700/70 text-white'
+          : 'border border-slate-200 bg-slate-50 text-slate-700'
+      }`}
+    >
+      {isImage ? (
+        <ImageIcon size={15} />
+      ) : (
+        <FileText size={15} />
+      )}
+
+      <span className="min-w-0 flex-1 truncate text-xs">
+        {file.file_name}
+        {file.file_size ? ` · ${formatSize(file.file_size)}` : ''}
+      </span>
+
+      {file.signed_url ? (
+        <a
+          href={file.signed_url}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 text-xs font-bold underline"
+        >
+          Abrir
+        </a>
+      ) : (
+        <span className="text-xs opacity-60">Indisponível</span>
+      )}
+    </div>
+  )
 }
 
 export default function TicketDetails() {
@@ -127,6 +196,7 @@ export default function TicketDetails() {
   const [ticket, setTicket] = useState(null)
   const [customer, setCustomer] = useState(null)
   const [company, setCompany] = useState(null)
+
   const [messages, setMessages] = useState([])
   const [initialAttachments, setInitialAttachments] = useState([])
 
@@ -141,6 +211,12 @@ export default function TicketDetails() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
+  const [currentUser, setCurrentUser] = useState(null)
+
+  // =====================================================
+  // CARREGAR CHAMADO E CONVERSA
+  // =====================================================
+
   const loadTicket = useCallback(async (showLoading = true) => {
     if (!id) return
 
@@ -153,6 +229,17 @@ export default function TicketDetails() {
     setError('')
 
     try {
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser()
+
+      if (authError) throw authError
+
+      if (!authData.user) {
+        throw new Error('Sua sessão expirou. Entre novamente.')
+      }
+
+      setCurrentUser(authData.user)
+
       const { data: ticketData, error: ticketError } =
         await supabase
           .from('tickets')
@@ -192,6 +279,9 @@ export default function TicketDetails() {
           .eq('id', ticketData.client_company_id)
           .maybeSingle(),
 
+        // Compatibilidade com a coluna sender_name.
+        // Caso ainda não exista no banco, a consulta é repetida
+        // sem essa coluna.
         supabase
           .from('ticket_messages')
           .select(`
@@ -201,6 +291,7 @@ export default function TicketDetails() {
             client_company_id,
             sender_id,
             sender_type,
+            sender_name,
             message,
             created_at
           `)
@@ -223,10 +314,44 @@ export default function TicketDetails() {
           .order('created_at', { ascending: true }),
       ])
 
-      if (messageResult.error) throw messageResult.error
       if (attachmentResult.error) throw attachmentResult.error
 
-      const allFiles = await Promise.all(
+      let messageRows = messageResult.data || []
+
+      if (messageResult.error) {
+        const errorText = messageResult.error.message || ''
+
+        if (
+          errorText.includes('sender_name') ||
+          errorText.includes('schema cache')
+        ) {
+          const fallback = await supabase
+            .from('ticket_messages')
+            .select(`
+              id,
+              ticket_id,
+              organization_id,
+              client_company_id,
+              sender_id,
+              sender_type,
+              message,
+              created_at
+            `)
+            .eq('ticket_id', id)
+            .order('created_at', { ascending: true })
+
+          if (fallback.error) throw fallback.error
+
+          messageRows = (fallback.data || []).map((item) => ({
+            ...item,
+            sender_name: null,
+          }))
+        } else {
+          throw messageResult.error
+        }
+      }
+
+      const attachments = await Promise.all(
         (attachmentResult.data || []).map(async (file) => {
           const { data, error: signedError } =
             await supabase.storage
@@ -234,10 +359,7 @@ export default function TicketDetails() {
               .createSignedUrl(file.storage_path, 3600)
 
           if (signedError) {
-            console.warn(
-              'Não foi possível gerar link temporário do anexo:',
-              signedError
-            )
+            console.warn('Erro ao abrir anexo:', signedError)
           }
 
           return {
@@ -247,9 +369,12 @@ export default function TicketDetails() {
         })
       )
 
-      const byMessage = allFiles.reduce((acc, file) => {
+      const attachmentsByMessage = attachments.reduce((acc, file) => {
         if (file.message_id) {
-          if (!acc[file.message_id]) acc[file.message_id] = []
+          if (!acc[file.message_id]) {
+            acc[file.message_id] = []
+          }
+
           acc[file.message_id].push(file)
         }
 
@@ -261,18 +386,18 @@ export default function TicketDetails() {
       setCompany(companyResult.data || null)
 
       setInitialAttachments(
-        allFiles.filter((file) => !file.message_id)
+        attachments.filter((file) => !file.message_id)
       )
 
       setMessages(
-        (messageResult.data || []).map((message) => ({
+        messageRows.map((message) => ({
           ...message,
-          attachments: byMessage[message.id] || [],
+          attachments: attachmentsByMessage[message.id] || [],
         }))
       )
-    } catch (loadError) {
-      console.error('Erro ao carregar chamado:', loadError)
-      setError(errorText(loadError))
+    } catch (err) {
+      console.error('Erro ao carregar chamado:', err)
+      setError(readableError(err))
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -283,11 +408,15 @@ export default function TicketDetails() {
     loadTicket(true)
   }, [loadTicket])
 
+  // =====================================================
+  // ATUALIZAÇÃO EM TEMPO REAL
+  // =====================================================
+
   useEffect(() => {
     if (!id) return undefined
 
     const channel = supabase
-      .channel(`staff-ticket-${id}`)
+      .channel(`staff-ticket-details-${id}`)
       .on(
         'postgres_changes',
         {
@@ -325,8 +454,13 @@ export default function TicketDetails() {
     }
   }, [id, loadTicket])
 
-  function selectFiles(event) {
+  // =====================================================
+  // SELEÇÃO DE ARQUIVOS
+  // =====================================================
+
+  function handleFileSelection(event) {
     const incoming = Array.from(event.target.files || [])
+
     event.target.value = ''
 
     if (!incoming.length) return
@@ -334,8 +468,10 @@ export default function TicketDetails() {
     const next = [...files]
 
     for (const file of incoming) {
-      if (!MIME[ext(file.name)]) {
-        setError(`Formato não permitido: ${file.name}`)
+      const ext = fileExtension(file.name)
+
+      if (!MIME[ext]) {
+        setError(`Formato de arquivo não permitido: ${file.name}`)
         return
       }
 
@@ -349,21 +485,23 @@ export default function TicketDetails() {
         return
       }
 
-      if (
-        !next.some(
-          (old) =>
-            old.name === file.name &&
-            old.size === file.size &&
-            old.lastModified === file.lastModified
-        )
-      ) {
-        next.push(file)
-      }
+      const duplicate = next.some(
+        (existing) =>
+          existing.name === file.name &&
+          existing.size === file.size &&
+          existing.lastModified === file.lastModified
+      )
+
+      if (!duplicate) next.push(file)
     }
 
     setFiles(next)
     setError('')
   }
+
+  // =====================================================
+  // ENVIAR ANEXOS
+  // =====================================================
 
   async function uploadMessageFiles(messageId, userId) {
     if (!files.length) return
@@ -383,10 +521,10 @@ export default function TicketDetails() {
           `${ticket.organization_id}/` +
           `${ticket.client_company_id}/` +
           `${ticket.id}/` +
-          `${unique}-${safeName(file.name)}`
+          `${unique}-${safeFileName(file.name)}`
 
         const contentType =
-          MIME[ext(file.name)] ||
+          MIME[getExtension(file.name)] ||
           file.type ||
           'application/octet-stream'
 
@@ -431,6 +569,10 @@ export default function TicketDetails() {
     }
   }
 
+  // =====================================================
+  // ENVIAR RESPOSTA DO ATENDENTE
+  // =====================================================
+
   async function sendReply(event) {
     event.preventDefault()
 
@@ -438,7 +580,7 @@ export default function TicketDetails() {
 
     const text = draft.trim()
 
-    if (!text && !files.length) {
+    if (!text && files.length === 0) {
       setError('Escreva uma resposta ou selecione um arquivo.')
       return
     }
@@ -447,37 +589,72 @@ export default function TicketDetails() {
     setError('')
     setNotice('')
 
-    let inserted = false
+    let messageCreated = false
 
     try {
-      const { data: auth, error: authError } =
+      const { data: authData, error: authError } =
         await supabase.auth.getUser()
 
       if (authError) throw authError
-      if (!auth.user) {
+      if (!authData.user) {
         throw new Error('Sua sessão expirou. Entre novamente.')
       }
 
-      const { data: messageRow, error: messageError } =
+      const staffName =
+        authData.user.user_metadata?.full_name ||
+        authData.user.user_metadata?.name ||
+        authData.user.email ||
+        'Equipe de atendimento'
+
+      const messagePayload = {
+        ticket_id: ticket.id,
+        organization_id: ticket.organization_id,
+        client_company_id: ticket.client_company_id,
+        sender_id: authData.user.id,
+        sender_type: 'STAFF',
+        sender_name: staffName,
+        message: text || 'Arquivo anexado.',
+      }
+
+      let insertedMessage
+
+      const { data: inserted, error: insertError } =
         await supabase
           .from('ticket_messages')
-          .insert({
-            ticket_id: ticket.id,
-            organization_id: ticket.organization_id,
-            client_company_id: ticket.client_company_id,
-            sender_id: auth.user.id,
-            sender_type: 'STAFF',
-            message: text || 'Arquivo anexado.',
-          })
+          .insert(messagePayload)
           .select('id')
           .single()
 
-      if (messageError) throw messageError
+      if (insertError) {
+        if (
+          insertError.message?.includes('sender_name') ||
+          insertError.message?.includes('schema cache')
+        ) {
+          const { sender_name, ...fallbackPayload } = messagePayload
 
-      inserted = true
+          const fallback = await supabase
+            .from('ticket_messages')
+            .insert(fallbackPayload)
+            .select('id')
+            .single()
+
+          if (fallback.error) throw fallback.error
+
+          insertedMessage = fallback.data
+        } else {
+          throw insertError
+        }
+      } else {
+        insertedMessage = inserted
+      }
+
+      messageCreated = true
 
       if (files.length) {
-        await uploadMessageFiles(messageRow.id, auth.user.id)
+        await uploadMessageFiles(
+          insertedMessage.id,
+          authData.user.id
+        )
       }
 
       setDraft('')
@@ -485,18 +662,22 @@ export default function TicketDetails() {
       setNotice('Resposta enviada ao cliente.')
 
       await loadTicket(false)
-    } catch (sendError) {
-      console.error('Erro ao enviar resposta:', sendError)
+    } catch (err) {
+      console.error('Erro ao enviar resposta:', err)
 
       setError(
-        inserted
-          ? `A mensagem foi enviada, mas houve falha no anexo. ${errorText(sendError)}`
-          : errorText(sendError)
+        messageCreated
+          ? `A mensagem foi enviada, mas ocorreu uma falha ao anexar os arquivos. ${readableError(err)}`
+          : readableError(err)
       )
     } finally {
       setSending(false)
     }
   }
+
+  // =====================================================
+  // ALTERAR STATUS
+  // =====================================================
 
   async function changeStatus(nextStatus) {
     if (!ticket || nextStatus === ticket.status) return
@@ -508,9 +689,15 @@ export default function TicketDetails() {
     try {
       const { data, error: updateError } = await supabase
         .from('tickets')
-        .update({ status: nextStatus })
+        .update({
+          status: nextStatus,
+        })
         .eq('id', ticket.id)
-        .select('id, status, updated_at')
+        .select(`
+          id,
+          status,
+          updated_at
+        `)
         .single()
 
       if (updateError) throw updateError
@@ -520,57 +707,80 @@ export default function TicketDetails() {
         ...data,
       }))
 
-      setNotice(`Status alterado para ${statusLabel(nextStatus)}.`)
-    } catch (updateError) {
-      console.error('Erro ao alterar status:', updateError)
-      setError(errorText(updateError))
+      setNotice(
+        `Status alterado para ${statusLabel(nextStatus)}.`
+      )
+    } catch (err) {
+      console.error('Erro ao alterar status:', err)
+      setError(readableError(err))
     } finally {
       setChangingStatus(false)
     }
   }
 
+  // =====================================================
+  // CARREGAMENTO
+  // =====================================================
+
   if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center gap-3 text-sm text-slate-500">
-        <Loader2 size={18} className="animate-spin" />
-        Carregando chamado...
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-slate-500">
+          <Loader2 size={19} className="animate-spin" />
+          Carregando atendimento...
+        </div>
       </div>
     )
   }
 
   if (!ticket) {
     return (
-      <div className="mx-auto max-w-3xl p-6">
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {error || 'Chamado não encontrado ou sem permissão de acesso.'}
-        </div>
+      <main className="mx-auto max-w-4xl px-5 py-8">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+          <div className="flex items-center gap-2 font-semibold text-red-700">
+            <AlertCircle size={18} />
+            Não foi possível abrir o chamado
+          </div>
 
-        <Link
-          to="/chamados"
-          className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700"
-        >
-          <ArrowLeft size={16} />
-          Voltar aos chamados
-        </Link>
-      </div>
+          <p className="mt-2 text-sm text-red-600">
+            {error || 'Chamado não encontrado ou sem permissão de acesso.'}
+          </p>
+
+          <Link
+            to="/chamados"
+            className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700"
+          >
+            <ArrowLeft size={16} />
+            Voltar aos chamados
+          </Link>
+        </div>
+      </main>
     )
   }
 
+  // =====================================================
+  // INTERFACE
+  // =====================================================
+
   return (
-    <main className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
+    <main className="mx-auto w-full max-w-[1040px] space-y-5 px-4 py-5 sm:px-6 lg:px-8">
+
+      {/* VOLTAR E ATUALIZAR */}
+
       <div className="flex items-center justify-between gap-3">
         <Link
           to="/chamados"
-          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-blue-700"
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-blue-700"
         >
           <ArrowLeft size={16} />
           Voltar aos chamados
         </Link>
 
         <button
+          type="button"
           onClick={() => loadTicket(false)}
           disabled={refreshing}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600"
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
         >
           <RefreshCw
             size={15}
@@ -580,135 +790,192 @@ export default function TicketDetails() {
         </button>
       </div>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <header className="flex flex-col gap-4 border-b border-slate-100 bg-slate-50 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-6">
-          <div className="flex items-start gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-              <Ticket size={21} />
-            </span>
-
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-blue-700">
-                Chamado #{ticket.number ?? String(ticket.id).slice(0, 8)}
-              </p>
-
-              <h1 className="mt-1 text-xl font-bold">
-                {ticket.subject}
-              </h1>
-
-              <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                <CalendarDays size={13} />
-                Aberto em {dateTime(ticket.created_at)}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label htmlFor="ticket-status" className="sr-only">
-              Status do chamado
-            </label>
-
-            <select
-              id="ticket-status"
-              value={ticket.status}
-              onChange={(event) => changeStatus(event.target.value)}
-              disabled={changingStatus}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold"
-            >
-              {STATUSES.map((status) => (
-                <option key={status.value} value={status.value}>
-                  {status.label}
-                </option>
-              ))}
-            </select>
-
-            {changingStatus && (
-              <Loader2 size={16} className="animate-spin text-blue-600" />
-            )}
-          </div>
-        </header>
-
-        <div className="grid gap-3 p-5 sm:grid-cols-3 sm:p-6">
-          <Info
-            label="Cliente"
-            value={customer?.name || 'Cliente'}
-            detail={customer?.email || ''}
-          />
-
-          <Info
-            label="Empresa cliente"
-            value={company?.name || '—'}
-            icon={<Building2 size={15} />}
-          />
-
-          <Info
-            label="Prioridade"
-            value={priorityLabel(ticket.priority)}
-          />
-        </div>
-      </section>
-
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <AlertCircle size={17} className="mt-0.5 shrink-0" />
           {error}
         </div>
       )}
 
       {notice && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+        <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+          <CheckCircle2 size={17} className="mt-0.5 shrink-0" />
           {notice}
         </div>
       )}
 
+      {/* CABEÇALHO DO CHAMADO */}
+
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 p-5">
-          <h2 className="flex items-center gap-2 font-bold">
-            <MessageSquare size={18} className="text-blue-600" />
+
+        <header className="flex flex-col justify-between gap-4 border-b border-slate-100 bg-slate-50/70 p-5 sm:flex-row sm:items-start sm:px-6 sm:py-5">
+
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+              <Ticket size={20} />
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-blue-700">
+                CHAMADO #{ticket.number ?? String(ticket.id).slice(0, 8)}
+              </p>
+
+              <h1 className="mt-1 break-words text-lg font-bold text-slate-900">
+                {ticket.subject}
+              </h1>
+
+              <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+                <CalendarDays size={13} />
+                Aberto em {formatDate(ticket.created_at)}
+              </p>
+            </div>
+          </div>
+
+          <div className="shrink-0">
+            <select
+              value={ticket.status}
+              onChange={(event) => changeStatus(event.target.value)}
+              disabled={changingStatus}
+              aria-label="Alterar status do chamado"
+              className={`w-full min-w-[165px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50`}
+            >
+              {STATUSES.map((status) => (
+                <option
+                  key={status.value}
+                  value={status.value}
+                >
+                  {status.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+        </header>
+
+        {/* INFORMAÇÕES DO CLIENTE */}
+
+        <div className="grid gap-3 p-5 sm:grid-cols-3 sm:px-6">
+
+          <InfoCard
+            label="CLIENTE"
+            icon={<UserRound size={14} />}
+            value={customer?.name || 'Cliente'}
+            detail={customer?.email || ''}
+          />
+
+          <InfoCard
+            label="EMPRESA CLIENTE"
+            icon={<Building2 size={14} />}
+            value={company?.name || '—'}
+          />
+
+          <InfoCard
+            label="PRIORIDADE"
+            value={priorityLabel(ticket.priority)}
+            valueClass={priorityStyle(ticket.priority)}
+          />
+
+        </div>
+      </section>
+
+      {/* CONVERSA */}
+
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+
+        <header className="border-b border-slate-100 px-5 py-4 sm:px-6">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">
+            <MessageSquare size={17} className="text-blue-600" />
             Conversa do chamado
           </h2>
+
           <p className="mt-1 text-xs text-slate-500">
             Responda ao cliente e acompanhe todas as devolutivas.
           </p>
-        </div>
+        </header>
 
-        <div className="space-y-4 p-4 sm:p-6">
+        {/* HISTÓRICO DE MENSAGENS */}
+
+        <div className="space-y-5 bg-white px-5 py-5 sm:px-6 sm:py-6">
+
+          {/* SOLICITAÇÃO INICIAL */}
+
           <div className="flex justify-start">
-            <div className="max-w-[92%] rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <p className="flex items-center gap-2 text-xs font-bold text-slate-600">
-                <UserRound size={14} />
-                {customer?.name || 'Cliente'} · Solicitação inicial
-              </p>
+            <div className="max-w-[85%] rounded-xl border border-slate-200 bg-slate-50 p-3.5 shadow-sm">
 
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-700">
+                <UserRound size={14} />
+
+                {customer?.name || 'Cliente'}
+
+                <span className="font-normal text-slate-400">
+                  · Solicitação inicial
+                </span>
+              </div>
+
+              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
                 {ticket.description || 'Sem descrição.'}
               </p>
 
               {initialAttachments.map((file) => (
-                <Attachment key={file.id} file={file} />
+                <Attachment
+                  key={file.id}
+                  file={file}
+                />
               ))}
+
             </div>
           </div>
 
           {messages.map((message) => {
-            const staff = message.sender_type === 'STAFF'
+            const isStaff = message.sender_type === 'STAFF'
+
+            const senderName = isStaff
+              ? (
+                  message.sender_name ||
+                  'Equipe de atendimento'
+                )
+              : (
+                  message.sender_name ||
+                  (
+                    message.sender_id === currentUser?.id
+                      ? customer?.name
+                      : customer?.name
+                  ) ||
+                  'Cliente'
+                )
 
             return (
               <div
                 key={message.id}
-                className={`flex ${staff ? 'justify-end' : 'justify-start'}`}
+                className={`flex ${isStaff ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[92%] rounded-xl p-4 ${
-                    staff
+                  className={`max-w-[85%] rounded-xl p-3.5 shadow-sm ${
+                    isStaff
                       ? 'bg-blue-600 text-white'
                       : 'border border-slate-200 bg-white text-slate-800'
                   }`}
                 >
-                  <p className={`text-xs font-bold ${staff ? 'text-blue-100' : 'text-slate-500'}`}>
-                    {staff ? 'Equipe de atendimento' : customer?.name || 'Cliente'}
-                    {' · '}
-                    {dateTime(message.created_at)}
-                  </p>
+
+                  <div className={`flex flex-wrap items-center gap-2 text-xs font-bold ${
+                    isStaff ? 'text-blue-100' : 'text-slate-500'
+                  }`}>
+                    {isStaff ? (
+                      <Headphones size={14} />
+                    ) : (
+                      <UserRound size={14} />
+                    )}
+
+                    <span>{senderName}</span>
+
+                    <span className={`font-normal ${
+                      isStaff
+                        ? 'text-blue-100/80'
+                        : 'text-slate-400'
+                    }`}>
+                      · {formatDate(message.created_at)}
+                    </span>
+                  </div>
 
                   <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">
                     {message.message}
@@ -718,32 +985,40 @@ export default function TicketDetails() {
                     <Attachment
                       key={file.id}
                       file={file}
-                      inverse={staff}
+                      inverse={isStaff}
                     />
                   ))}
+
                 </div>
               </div>
             )
           })}
 
           {messages.length === 0 && (
-            <p className="py-3 text-center text-xs text-slate-400">
-              Nenhuma resposta foi enviada ainda.
-            </p>
+            <div className="py-4 text-center text-xs text-slate-400">
+              Ainda não existem respostas neste chamado.
+            </div>
           )}
+
         </div>
 
+        {/* RESPOSTA */}
+
         {ticket.status === 'CLOSED' ? (
-          <div className="flex items-start gap-2 border-t border-slate-100 bg-slate-50 p-4 text-sm text-slate-600">
-            <LockKeyhole size={17} />
-            Chamado fechado. Altere o status para reabrir e permitir novas mensagens.
+          <div className="flex items-start gap-2 border-t border-slate-100 bg-slate-50 p-5 text-sm text-slate-600">
+            <CheckCircle2 size={17} className="shrink-0 text-emerald-600" />
+            Este chamado está fechado. Altere o status no cabeçalho para reabrir o atendimento.
           </div>
         ) : (
           <form
             onSubmit={sendReply}
-            className="space-y-3 border-t border-slate-100 bg-slate-50 p-4 sm:p-6"
+            className="space-y-3 border-t border-slate-100 bg-slate-50/70 p-5 sm:p-6"
           >
-            <label htmlFor="staff-reply" className="text-sm font-semibold">
+
+            <label
+              htmlFor="staff-reply"
+              className="block text-sm font-semibold text-slate-800"
+            >
               Sua resposta ao cliente
             </label>
 
@@ -751,48 +1026,61 @@ export default function TicketDetails() {
               id="staff-reply"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              rows={4}
+              rows={5}
               maxLength={10000}
               placeholder="Digite sua resposta..."
-              className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm outline-none focus:border-blue-400"
+              className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
             />
 
+            {/* ARQUIVOS SELECIONADOS */}
+
             {files.length > 0 && (
-              <div className="space-y-1">
+              <div className="flex flex-wrap gap-2">
                 {files.map((file, index) => (
-                  <div
+                  <span
                     key={`${file.name}-${index}`}
-                    className="flex items-center justify-between text-xs"
+                    className="inline-flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
                   >
-                    <span className="truncate">
-                      {file.name} · {sizeLabel(file.size)}
+                    <Paperclip size={13} />
+                    <span className="max-w-48 truncate">
+                      {file.name}
+                    </span>
+                    <span className="text-slate-400">
+                      {formatSize(file.size)}
                     </span>
 
                     <button
                       type="button"
                       onClick={() =>
-                        setFiles((rows) =>
-                          rows.filter((_, i) => i !== index)
+                        setFiles((current) =>
+                          current.filter((_, i) => i !== index)
                         )
                       }
-                      className="text-red-500"
+                      aria-label={`Remover ${file.name}`}
+                      className="ml-1 text-red-500"
                     >
-                      Remover
+                      <X size={14} />
                     </button>
-                  </div>
+                  </span>
                 ))}
               </div>
             )}
 
+            {/* AÇÕES */}
+
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold">
+
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
+
                 <Paperclip size={15} />
+
                 Anexar arquivos
+
                 <input
                   type="file"
                   multiple
                   accept={ACCEPT}
-                  onChange={selectFiles}
+                  onChange={handleFileSelection}
                   className="sr-only"
                   disabled={sending}
                 />
@@ -801,7 +1089,7 @@ export default function TicketDetails() {
               <button
                 type="submit"
                 disabled={sending || (!draft.trim() && !files.length)}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {sending ? (
                   <Loader2 size={16} className="animate-spin" />
@@ -810,66 +1098,40 @@ export default function TicketDetails() {
                 )}
                 Enviar resposta
               </button>
+
             </div>
+
+            <p className="text-[11px] text-slate-400">
+              Você pode anexar até 5 arquivos, com limite de 10 MB por arquivo.
+            </p>
+
           </form>
         )}
       </section>
+
     </main>
   )
 }
 
-function Info({ label, value, detail, icon }) {
+function InfoCard({ label, value, detail, icon, valueClass = '' }) {
   return (
-    <div className="rounded-xl border border-slate-200 p-3">
+    <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3">
+
       <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
         {label}
       </p>
 
-      <p className="mt-1 flex items-center gap-2 text-sm font-semibold text-slate-800">
+      <p className={`mt-2 flex items-center gap-2 break-words text-sm font-semibold text-slate-800 ${valueClass}`}>
         {icon}
         {value}
       </p>
 
       {detail && (
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 truncate text-xs text-slate-500">
           {detail}
         </p>
       )}
-    </div>
-  )
-}
 
-function Attachment({ file, inverse = false }) {
-  const image = String(file.mime_type || '').startsWith('image/')
-
-  return (
-    <div
-      className={`mt-2 flex items-center gap-2 rounded-lg p-2 ${
-        inverse
-          ? 'bg-blue-700/70 text-white'
-          : 'border border-slate-200 bg-white text-slate-700'
-      }`}
-    >
-      <span>
-        {image ? <ImageIcon size={15} /> : <FileText size={15} />}
-      </span>
-
-      <span className="min-w-0 flex-1 truncate text-xs">
-        {file.file_name} ({sizeLabel(file.file_size)})
-      </span>
-
-      {file.signed_url ? (
-        <a
-          href={file.signed_url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs font-bold underline"
-        >
-          Abrir
-        </a>
-      ) : (
-        <span className="text-xs opacity-60">Indisponível</span>
-      )}
     </div>
   )
 }
