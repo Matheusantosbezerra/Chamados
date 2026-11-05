@@ -158,6 +158,10 @@ function readableError(error) {
   return error.message || 'Não foi possível concluir a operação.'
 }
 
+// =====================================================
+// COMPONENTE DE ANEXO
+// =====================================================
+
 function Attachment({ file, inverse = false }) {
   const isImage = String(file.mime_type || '').startsWith('image/')
 
@@ -198,6 +202,10 @@ function Attachment({ file, inverse = false }) {
   )
 }
 
+// =====================================================
+// CARD DE INFORMAÇÃO
+// =====================================================
+
 function InfoCard({
   label,
   value,
@@ -227,6 +235,10 @@ function InfoCard({
   )
 }
 
+// =====================================================
+// TELA DE DETALHES DO CLIENTE
+// =====================================================
+
 export default function ClientTicketDetails() {
   const { id } = useParams()
 
@@ -250,7 +262,7 @@ export default function ClientTicketDetails() {
   const [notice, setNotice] = useState('')
 
   // =====================================================
-  // CARREGAR CHAMADO E CONVERSA
+  // CARREGAR CHAMADO
   // =====================================================
 
   const loadTicket = useCallback(async (showLoading = true) => {
@@ -278,7 +290,6 @@ export default function ClientTicketDetails() {
 
       setCurrentUser(authData.user)
 
-      // O acesso é limitado pelas políticas RLS do Supabase.
       const {
         data: ticketData,
         error: ticketError,
@@ -294,6 +305,8 @@ export default function ClientTicketDetails() {
           customer_id,
           client_company_id,
           organization_id,
+          created_by_type,
+          created_by_user_id,
           created_at,
           updated_at
         `)
@@ -358,7 +371,7 @@ export default function ClientTicketDetails() {
 
       let messageRows = messageResult.data || []
 
-      // Compatibilidade caso sender_name ainda não exista na tabela.
+      // Compatibilidade caso sender_name ainda não exista.
       if (messageResult.error) {
         const errorText = messageResult.error.message || ''
 
@@ -392,7 +405,7 @@ export default function ClientTicketDetails() {
         }
       }
 
-      // Criar links temporários para os anexos privados.
+      // Criar links temporários para anexos privados.
       const attachments = await Promise.all(
         (attachmentResult.data || []).map(async (file) => {
           const {
@@ -443,7 +456,7 @@ export default function ClientTicketDetails() {
         }))
       )
     } catch (err) {
-      console.error('Erro ao carregar chamado do cliente:', {
+      console.error('[PORTAL CLIENTE] Erro ao carregar chamado:', {
         code: err?.code,
         message: err?.message,
         details: err?.details,
@@ -554,7 +567,7 @@ export default function ClientTicketDetails() {
   }
 
   // =====================================================
-  // ENVIAR ANEXOS DA MENSAGEM
+  // ENVIAR ANEXOS
   // =====================================================
 
   async function uploadMessageFiles(messageId, userId) {
@@ -618,15 +631,9 @@ export default function ClientTicketDetails() {
       if (insertError) throw insertError
     } catch (uploadError) {
       if (uploadedPaths.length) {
-        const {
-          error: removeError,
-        } = await supabase.storage
+        await supabase.storage
           .from(BUCKET)
           .remove(uploadedPaths)
-
-        if (removeError) {
-          console.error('Erro ao remover upload parcial:', removeError)
-        }
       }
 
       throw uploadError
@@ -668,14 +675,12 @@ export default function ClientTicketDetails() {
       }
 
       const senderName =
+        customer?.name ||
         authData.user.user_metadata?.full_name ||
         authData.user.user_metadata?.name ||
         authData.user.email ||
         'Cliente'
 
-      // ATENÇÃO:
-      // Esta página sempre envia como CUSTOMER.
-      // Não existe atualização de status nesta função.
       const messagePayload = {
         ticket_id: ticket.id,
         organization_id: ticket.organization_id,
@@ -707,7 +712,6 @@ export default function ClientTicketDetails() {
       if (insertError) {
         const errorText = insertError.message || ''
 
-        // Compatibilidade caso sender_name ainda não exista.
         if (
           errorText.includes('sender_name') ||
           errorText.includes('schema cache')
@@ -807,7 +811,22 @@ export default function ClientTicketDetails() {
   }
 
   // =====================================================
-  // INTERFACE DO PORTAL DO CLIENTE
+  // IDENTIFICAR AUTOR DA SOLICITAÇÃO INICIAL
+  // =====================================================
+
+  const initialMessageIsMine =
+    Boolean(currentUser?.id) &&
+    (
+      ticket.created_by_user_id === currentUser.id ||
+      (
+        !ticket.created_by_user_id &&
+        ticket.created_by_type !== 'STAFF' &&
+        ticket.customer_id === customer?.id
+      )
+    )
+
+  // =====================================================
+  // INTERFACE
   // =====================================================
 
   return (
@@ -916,6 +935,7 @@ export default function ClientTicketDetails() {
       {/* CONVERSA */}
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+
         <header className="border-b border-slate-100 px-5 py-4 sm:px-6">
           <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">
             <MessageSquare size={17} className="text-blue-600" />
@@ -933,18 +953,45 @@ export default function ClientTicketDetails() {
 
           {/* SOLICITAÇÃO INICIAL */}
 
-          <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-xl border border-slate-200 bg-slate-50 p-3.5 shadow-sm">
-              <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-700">
-                <UserRound size={14} />
-                {customer?.name || 'Cliente'}
+          <div className={`flex ${initialMessageIsMine ? 'justify-end' : 'justify-start'}`}>
+            <div
+              className={`max-w-[85%] rounded-xl p-3.5 shadow-sm ${
+                initialMessageIsMine
+                  ? 'bg-blue-600 text-white'
+                  : 'border border-slate-200 bg-slate-50 text-slate-800'
+              }`}
+            >
+              <div
+                className={`flex flex-wrap items-center gap-2 text-xs font-bold ${
+                  initialMessageIsMine ? 'text-blue-100' : 'text-slate-700'
+                }`}
+              >
+                {initialMessageIsMine ? (
+                  <UserRound size={14} />
+                ) : (
+                  <UserRound size={14} />
+                )}
 
-                <span className="font-normal text-slate-400">
+                {initialMessageIsMine
+                  ? 'Você'
+                  : customer?.name || 'Cliente'}
+
+                <span
+                  className={`font-normal ${
+                    initialMessageIsMine
+                      ? 'text-blue-100/80'
+                      : 'text-slate-400'
+                  }`}
+                >
                   · Solicitação inicial
                 </span>
               </div>
 
-              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
+              <p
+                className={`mt-2 whitespace-pre-wrap break-words text-sm leading-6 ${
+                  initialMessageIsMine ? 'text-white' : 'text-slate-700'
+                }`}
+              >
                 {ticket.description || 'Sem descrição.'}
               </p>
 
@@ -952,41 +999,44 @@ export default function ClientTicketDetails() {
                 <Attachment
                   key={file.id}
                   file={file}
+                  inverse={initialMessageIsMine}
                 />
               ))}
             </div>
           </div>
 
-          {/* MENSAGENS */}
+          {/* MENSAGENS DA CONVERSA */}
 
           {messages.map((message) => {
+            // A posição é definida pelo autor da mensagem.
+            // O usuário logado fica sempre à direita.
+            const isMine = message.sender_id === currentUser?.id
             const isStaff = message.sender_type === 'STAFF'
 
-            const senderName =
-              message.sender_name ||
-              (
-                isStaff
-                  ? 'Equipe de atendimento'
-                  : message.sender_id === currentUser?.id
-                    ? 'Você'
+            const senderName = isMine
+              ? 'Você'
+              : message.sender_name ||
+                (
+                  isStaff
+                    ? 'Equipe de atendimento'
                     : 'Outro usuário da empresa'
-              )
+                )
 
             return (
               <div
                 key={message.id}
-                className={`flex ${isStaff ? 'justify-end' : 'justify-start'}`}
+                className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
               >
                 <div
                   className={`max-w-[85%] rounded-xl p-3.5 shadow-sm ${
-                    isStaff
+                    isMine
                       ? 'bg-blue-600 text-white'
                       : 'border border-slate-200 bg-white text-slate-800'
                   }`}
                 >
                   <div
                     className={`flex flex-wrap items-center gap-2 text-xs font-bold ${
-                      isStaff ? 'text-blue-100' : 'text-slate-500'
+                      isMine ? 'text-blue-100' : 'text-slate-500'
                     }`}
                   >
                     {isStaff ? (
@@ -999,7 +1049,7 @@ export default function ClientTicketDetails() {
 
                     <span
                       className={`font-normal ${
-                        isStaff
+                        isMine
                           ? 'text-blue-100/80'
                           : 'text-slate-400'
                       }`}
@@ -1008,7 +1058,11 @@ export default function ClientTicketDetails() {
                     </span>
                   </div>
 
-                  <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">
+                  <p
+                    className={`mt-2 whitespace-pre-wrap break-words text-sm leading-6 ${
+                      isMine ? 'text-white' : 'text-slate-700'
+                    }`}
+                  >
                     {message.message}
                   </p>
 
@@ -1016,7 +1070,7 @@ export default function ClientTicketDetails() {
                     <Attachment
                       key={file.id}
                       file={file}
-                      inverse={isStaff}
+                      inverse={isMine}
                     />
                   ))}
                 </div>
@@ -1031,7 +1085,7 @@ export default function ClientTicketDetails() {
           )}
         </div>
 
-        {/* RESPOSTA DO CLIENTE */}
+        {/* RESPOSTA */}
 
         {ticket.status === 'CLOSED' ? (
           <div className="flex items-start gap-2 border-t border-slate-100 bg-slate-50 p-5 text-sm text-slate-600">
