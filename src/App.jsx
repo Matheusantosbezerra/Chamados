@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react'
 import {
   BrowserRouter,
@@ -17,6 +18,7 @@ import Organizacoes from './pages/Organizacoes'
 import Tickets from './pages/Tickets'
 import AcceptInvitation from './pages/AcceptInvitation'
 import ClientPortal from './pages/ClientPortal'
+import ClientTicketDetails from './pages/ClientTicketDetails'
 
 import Sidebar from './components/Sidebar'
 import Header from './components/Header'
@@ -27,7 +29,6 @@ import Register from './pages/Register'
 import CreateOrganization from './pages/CreateOrganization'
 import Team from './pages/Team'
 
-// Layout da área interna (prestadora de suporte)
 function StaffLayout({ children }) {
   return (
     <div className="min-h-screen bg-slate-50">
@@ -45,7 +46,6 @@ function StaffLayout({ children }) {
   )
 }
 
-// Tela para escolher o ambiente quando o usuário tem os dois acessos
 function ChooseArea() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
@@ -54,6 +54,7 @@ function ChooseArea() {
           <h1 className="text-3xl font-bold text-slate-900">
             Bem-vindo ao Inderio Desk
           </h1>
+
           <p className="mt-2 text-slate-500">
             Escolha o ambiente que deseja acessar.
           </p>
@@ -67,12 +68,15 @@ function ChooseArea() {
             <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-xl bg-blue-100 text-2xl">
               🎧
             </div>
+
             <h2 className="text-xl font-semibold text-slate-900">
               Área de atendimento
             </h2>
+
             <p className="mt-2 text-sm text-slate-500">
               Gerencie empresas, chamados, equipe e atendimentos.
             </p>
+
             <span className="mt-6 inline-block font-medium text-blue-600">
               Acessar atendimento →
             </span>
@@ -85,12 +89,15 @@ function ChooseArea() {
             <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-xl bg-green-100 text-2xl">
               🏢
             </div>
+
             <h2 className="text-xl font-semibold text-slate-900">
               Portal do cliente
             </h2>
+
             <p className="mt-2 text-sm text-slate-500">
               Abra chamados, acompanhe solicitações e converse com o atendimento.
             </p>
+
             <span className="mt-6 inline-block font-medium text-green-600">
               Acessar portal →
             </span>
@@ -111,7 +118,6 @@ function ChooseArea() {
   )
 }
 
-// Conta de cliente criada, mas ainda sem vínculo em customer_users
 function PendingCustomerRegistration() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
@@ -119,16 +125,20 @@ function PendingCustomerRegistration() {
         <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600">
           <Building2 size={32} />
         </div>
+
         <h1 className="text-2xl font-bold text-slate-900">
           Cadastro realizado!
         </h1>
+
         <p className="mt-3 text-slate-600">
           Sua conta foi criada, mas ainda não está vinculada à empresa que enviou
           seu convite. Entre em contato com essa empresa para verificar o convite.
         </p>
+
         <p className="mt-3 text-sm text-slate-500">
           Você poderá acessar o portal assim que o vínculo for concluído.
         </p>
+
         <button
           type="button"
           onClick={() => supabase.auth.signOut()}
@@ -152,12 +162,12 @@ function AppRoutes() {
   const [accessLoading, setAccessLoading] = useState(true)
   const [accessError, setAccessError] = useState('')
 
-  // Carrega e acompanha a sessão do Supabase Auth.
   useEffect(() => {
     let active = true
 
     async function loadSession() {
       const { data, error } = await supabase.auth.getSession()
+
       if (!active) return
 
       if (error) {
@@ -176,6 +186,7 @@ function AppRoutes() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, currentSession) => {
       if (!active) return
+
       setSession(currentSession)
       setAuthLoading(false)
     })
@@ -186,7 +197,6 @@ function AppRoutes() {
     }
   }, [])
 
-  // Consulta os vínculos do usuário na equipe e no portal do cliente.
   useEffect(() => {
     let active = true
 
@@ -207,6 +217,7 @@ function AppRoutes() {
           .from('memberships')
           .select('organization_id, role')
           .eq('user_id', session.user.id),
+
         supabase
           .from('customer_users')
           .select('client_company_id, customer_id')
@@ -219,10 +230,11 @@ function AppRoutes() {
         console.error(
           'Erro ao verificar acessos:',
           membershipResult.error,
-          customerResult.error,
+          customerResult.error
         )
+
         setAccessError(
-          'Não foi possível verificar seus acessos. Confira as políticas RLS e tente novamente.',
+          'Não foi possível verificar seus acessos. Confira as políticas RLS e tente novamente.'
         )
       } else {
         setMemberships(membershipResult.data || [])
@@ -241,7 +253,6 @@ function AppRoutes() {
     }
   }, [session, authLoading, location.pathname])
 
-  // A redefinição de senha e o aceite do convite são acessíveis por link de e-mail.
   if (location.pathname === '/redefinir-senha') {
     return <ResetPassword />
   }
@@ -259,9 +270,9 @@ function AppRoutes() {
   }
 
   const isAuthPage =
-    location.pathname === '/login' || location.pathname === '/cadastro'
+    location.pathname === '/login' ||
+    location.pathname === '/cadastro'
 
-  // Rotas públicas para usuários ainda não autenticados.
   if (!session) {
     return (
       <Routes>
@@ -285,6 +296,7 @@ function AppRoutes() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
         <p className="text-center text-red-600">{accessError}</p>
+
         <button
           type="button"
           onClick={() => window.location.reload()}
@@ -308,25 +320,27 @@ function AppRoutes() {
     return <PendingCustomerRegistration />
   }
 
-  // Usuário autenticado não deve permanecer nas páginas de login/cadastro.
   if (isAuthPage) {
     if (hasStaffAccess && hasCustomerAccess) {
       return <Navigate to="/escolher-area" replace />
     }
+
     if (hasCustomerAccess) {
       return <Navigate to="/portal" replace />
     }
+
     if (hasStaffAccess) {
       return <Navigate to="/" replace />
     }
+
     return <Navigate to="/configurar-empresa" replace />
   }
 
-  // Usuário sem vínculo precisa configurar a empresa ou aguardar associação.
   if (!hasStaffAccess && !hasCustomerAccess) {
     if (location.pathname === '/configurar-empresa') {
       return <CreateOrganization />
     }
+
     return <Navigate to="/configurar-empresa" replace />
   }
 
@@ -343,7 +357,7 @@ function AppRoutes() {
         }
       />
 
-      {/* Área interna da prestadora */}
+      {/* Área interna */}
       <Route
         path="/"
         element={
@@ -446,7 +460,7 @@ function AppRoutes() {
         }
       />
 
-      {/* Portal do cliente: usa o componente real, não mais a tela provisória. */}
+      {/* Portal do cliente */}
       <Route
         path="/portal"
         element={
@@ -457,6 +471,19 @@ function AppRoutes() {
           )
         }
       />
+
+      {/* Detalhes do chamado do cliente em página própria */}
+      <Route
+        path="/portal/chamados/:id"
+        element={
+          hasCustomerAccess ? (
+            <ClientTicketDetails />
+          ) : (
+            <Navigate to="/portal" replace />
+          )
+        }
+      />
+
       <Route
         path="/portal/*"
         element={
