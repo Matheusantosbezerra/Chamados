@@ -122,12 +122,14 @@ function statusStyle(status) {
 }
 
 function priorityLabel(priority) {
-  return {
-    LOW: 'Baixa',
-    NORMAL: 'Normal',
-    HIGH: 'Alta',
-    URGENT: 'Urgente',
-  }[priority] || 'Normal'
+  return (
+    {
+      LOW: 'Baixa',
+      NORMAL: 'Normal',
+      HIGH: 'Alta',
+      URGENT: 'Urgente',
+    }[priority] || 'Normal'
+  )
 }
 
 function priorityStyle(priority) {
@@ -156,11 +158,17 @@ function readableError(error) {
   return error.message || 'Não foi possível concluir a operação.'
 }
 
-function Attachment({ file }) {
+function Attachment({ file, inverse = false }) {
   const isImage = String(file.mime_type || '').startsWith('image/')
 
   return (
-    <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-slate-700">
+    <div
+      className={`mt-2 flex items-center gap-2 rounded-lg p-2 ${
+        inverse
+          ? 'bg-blue-700/70 text-white'
+          : 'border border-slate-200 bg-slate-50 text-slate-700'
+      }`}
+    >
       {isImage ? (
         <ImageIcon size={15} />
       ) : (
@@ -169,10 +177,7 @@ function Attachment({ file }) {
 
       <span className="min-w-0 flex-1 truncate text-xs">
         {file.file_name}
-
-        {file.file_size
-          ? ` · ${formatSize(file.file_size)}`
-          : ''}
+        {file.file_size ? ` · ${formatSize(file.file_size)}` : ''}
       </span>
 
       {file.signed_url ? (
@@ -180,7 +185,7 @@ function Attachment({ file }) {
           href={file.signed_url}
           target="_blank"
           rel="noreferrer"
-          className="shrink-0 text-xs font-bold text-blue-700 underline"
+          className="shrink-0 text-xs font-bold underline"
         >
           Abrir
         </a>
@@ -273,7 +278,7 @@ export default function ClientTicketDetails() {
 
       setCurrentUser(authData.user)
 
-      // O acesso ao chamado é validado pelas políticas RLS.
+      // O acesso é limitado pelas políticas RLS do Supabase.
       const {
         data: ticketData,
         error: ticketError,
@@ -353,7 +358,7 @@ export default function ClientTicketDetails() {
 
       let messageRows = messageResult.data || []
 
-      // Compatibilidade caso sender_name ainda não exista no banco.
+      // Compatibilidade caso sender_name ainda não exista na tabela.
       if (messageResult.error) {
         const errorText = messageResult.error.message || ''
 
@@ -387,7 +392,7 @@ export default function ClientTicketDetails() {
         }
       }
 
-      // Gerar URLs temporárias para abrir os anexos privados.
+      // Criar links temporários para os anexos privados.
       const attachments = await Promise.all(
         (attachmentResult.data || []).map(async (file) => {
           const {
@@ -434,12 +439,18 @@ export default function ClientTicketDetails() {
       setMessages(
         messageRows.map((message) => ({
           ...message,
-          attachments:
-            attachmentsByMessage[message.id] || [],
+          attachments: attachmentsByMessage[message.id] || [],
         }))
       )
     } catch (err) {
-      console.error('Erro ao carregar chamado do cliente:', err)
+      console.error('Erro ao carregar chamado do cliente:', {
+        code: err?.code,
+        message: err?.message,
+        details: err?.details,
+        hint: err?.hint,
+        error: err,
+      })
+
       setError(readableError(err))
     } finally {
       setLoading(false)
@@ -535,9 +546,7 @@ export default function ClientTicketDetails() {
           existing.lastModified === file.lastModified
       )
 
-      if (!duplicate) {
-        next.push(file)
-      }
+      if (!duplicate) next.push(file)
     }
 
     setFiles(next)
@@ -545,7 +554,7 @@ export default function ClientTicketDetails() {
   }
 
   // =====================================================
-  // ENVIAR ANEXOS
+  // ENVIAR ANEXOS DA MENSAGEM
   // =====================================================
 
   async function uploadMessageFiles(messageId, userId) {
@@ -616,10 +625,7 @@ export default function ClientTicketDetails() {
           .remove(uploadedPaths)
 
         if (removeError) {
-          console.error(
-            'Não foi possível remover os arquivos enviados:',
-            removeError
-          )
+          console.error('Erro ao remover upload parcial:', removeError)
         }
       }
 
@@ -628,7 +634,7 @@ export default function ClientTicketDetails() {
   }
 
   // =====================================================
-  // ENVIAR RESPOSTA DO CLIENTE
+  // ENVIAR MENSAGEM DO CLIENTE
   // =====================================================
 
   async function sendReply(event) {
@@ -667,9 +673,9 @@ export default function ClientTicketDetails() {
         authData.user.email ||
         'Cliente'
 
-      // IMPORTANTE:
-      // O cliente sempre envia como CUSTOMER.
-      // Nenhum status é alterado nesta função.
+      // ATENÇÃO:
+      // Esta página sempre envia como CUSTOMER.
+      // Não existe atualização de status nesta função.
       const messagePayload = {
         ticket_id: ticket.id,
         organization_id: ticket.organization_id,
@@ -679,6 +685,13 @@ export default function ClientTicketDetails() {
         sender_name: senderName,
         message: text || 'Arquivo anexado.',
       }
+
+      console.log('[PORTAL CLIENTE] Enviando mensagem:', {
+        ticket_id: messagePayload.ticket_id,
+        sender_id: messagePayload.sender_id,
+        sender_type: messagePayload.sender_type,
+        client_company_id: messagePayload.client_company_id,
+      })
 
       let insertedMessage
 
@@ -731,12 +744,11 @@ export default function ClientTicketDetails() {
 
       setDraft('')
       setFiles([])
-
       setNotice('Sua mensagem foi enviada ao atendimento.')
 
       await loadTicket(false)
     } catch (err) {
-      console.error('Erro ao enviar mensagem do cliente:', {
+      console.error('[PORTAL CLIENTE] Erro ao enviar mensagem:', {
         code: err?.code,
         message: err?.message,
         details: err?.details,
@@ -795,7 +807,7 @@ export default function ClientTicketDetails() {
   }
 
   // =====================================================
-  // INTERFACE DO CLIENTE
+  // INTERFACE DO PORTAL DO CLIENTE
   // =====================================================
 
   return (
@@ -829,14 +841,14 @@ export default function ClientTicketDetails() {
       {error && (
         <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           <AlertCircle size={17} className="mt-0.5 shrink-0" />
-          {error}
+          <span>{error}</span>
         </div>
       )}
 
       {notice && (
         <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
           <CheckCircle2 size={17} className="mt-0.5 shrink-0" />
-          {notice}
+          <span>{notice}</span>
         </div>
       )}
 
@@ -866,7 +878,7 @@ export default function ClientTicketDetails() {
             </div>
           </div>
 
-          {/* O CLIENTE APENAS VISUALIZA O STATUS */}
+          {/* STATUS SOMENTE PARA VISUALIZAÇÃO */}
 
           <div className="shrink-0">
             <span
@@ -875,13 +887,11 @@ export default function ClientTicketDetails() {
               {statusLabel(ticket.status)}
             </span>
           </div>
-
         </header>
 
-        {/* INFORMAÇÕES DO CLIENTE */}
+        {/* INFORMAÇÕES */}
 
         <div className="grid gap-3 p-5 sm:grid-cols-3 sm:px-6">
-
           <InfoCard
             label="CLIENTE"
             icon={<UserRound size={14} />}
@@ -900,14 +910,12 @@ export default function ClientTicketDetails() {
             value={priorityLabel(ticket.priority)}
             valueClass={priorityStyle(ticket.priority)}
           />
-
         </div>
       </section>
 
       {/* CONVERSA */}
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-
         <header className="border-b border-slate-100 px-5 py-4 sm:px-6">
           <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">
             <MessageSquare size={17} className="text-blue-600" />
@@ -919,7 +927,7 @@ export default function ClientTicketDetails() {
           </p>
         </header>
 
-        {/* HISTÓRICO DE MENSAGENS */}
+        {/* HISTÓRICO */}
 
         <div className="space-y-5 bg-white px-5 py-5 sm:px-6 sm:py-6">
 
@@ -927,10 +935,8 @@ export default function ClientTicketDetails() {
 
           <div className="flex justify-start">
             <div className="max-w-[85%] rounded-xl border border-slate-200 bg-slate-50 p-3.5 shadow-sm">
-
               <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-700">
                 <UserRound size={14} />
-
                 {customer?.name || 'Cliente'}
 
                 <span className="font-normal text-slate-400">
@@ -948,11 +954,10 @@ export default function ClientTicketDetails() {
                   file={file}
                 />
               ))}
-
             </div>
           </div>
 
-          {/* RESPOSTAS */}
+          {/* MENSAGENS */}
 
           {messages.map((message) => {
             const isStaff = message.sender_type === 'STAFF'
@@ -964,7 +969,7 @@ export default function ClientTicketDetails() {
                   ? 'Equipe de atendimento'
                   : message.sender_id === currentUser?.id
                     ? 'Você'
-                    : 'Cliente da empresa'
+                    : 'Outro usuário da empresa'
               )
 
             return (
@@ -979,12 +984,9 @@ export default function ClientTicketDetails() {
                       : 'border border-slate-200 bg-white text-slate-800'
                   }`}
                 >
-
                   <div
                     className={`flex flex-wrap items-center gap-2 text-xs font-bold ${
-                      isStaff
-                        ? 'text-blue-100'
-                        : 'text-slate-500'
+                      isStaff ? 'text-blue-100' : 'text-slate-500'
                     }`}
                   >
                     {isStaff ? (
@@ -1014,9 +1016,9 @@ export default function ClientTicketDetails() {
                     <Attachment
                       key={file.id}
                       file={file}
+                      inverse={isStaff}
                     />
                   ))}
-
                 </div>
               </div>
             )
@@ -1027,10 +1029,9 @@ export default function ClientTicketDetails() {
               Ainda não existem respostas neste chamado.
             </div>
           )}
-
         </div>
 
-        {/* RESPOSTA */}
+        {/* RESPOSTA DO CLIENTE */}
 
         {ticket.status === 'CLOSED' ? (
           <div className="flex items-start gap-2 border-t border-slate-100 bg-slate-50 p-5 text-sm text-slate-600">
@@ -1039,15 +1040,13 @@ export default function ClientTicketDetails() {
               className="shrink-0 text-emerald-600"
             />
 
-            Este chamado está fechado. Não é possível enviar novas mensagens.
-            Entre em contato com a equipe caso precise reabrir o atendimento.
+            Este chamado está fechado. Entre em contato com a equipe caso precise reabrir o atendimento.
           </div>
         ) : (
           <form
             onSubmit={sendReply}
             className="space-y-3 border-t border-slate-100 bg-slate-50/70 p-5 sm:p-6"
           >
-
             <label
               htmlFor="client-reply"
               className="block text-sm font-semibold text-slate-800"
@@ -1104,10 +1103,8 @@ export default function ClientTicketDetails() {
             {/* AÇÕES */}
 
             <div className="flex flex-wrap items-center justify-between gap-3">
-
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
                 <Paperclip size={15} />
-
                 Anexar arquivos
 
                 <input
@@ -1133,16 +1130,13 @@ export default function ClientTicketDetails() {
 
                 Enviar mensagem
               </button>
-
             </div>
 
             <p className="text-[11px] text-slate-400">
               Você pode anexar até 5 arquivos, com limite de 10 MB por arquivo.
             </p>
-
           </form>
         )}
-
       </section>
     </main>
   )
