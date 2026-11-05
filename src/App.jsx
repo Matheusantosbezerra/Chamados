@@ -12,7 +12,7 @@ import { Building2 } from 'lucide-react'
 import { supabase } from './lib/supabase'
 
 import ResetPassword from './pages/ResetPassword'
-import TicketDetails from './pages/ClientTicketDetails'
+import TicketDetails from './pages/TicketDetails'
 import Customers from './pages/Customers'
 import Organizacoes from './pages/Organizacoes'
 import Tickets from './pages/Tickets'
@@ -159,6 +159,7 @@ function AppRoutes() {
 
   const [memberships, setMemberships] = useState([])
   const [customerLinks, setCustomerLinks] = useState([])
+
   const [accessLoading, setAccessLoading] = useState(true)
   const [accessError, setAccessError] = useState('')
 
@@ -278,8 +279,14 @@ function AppRoutes() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/cadastro" element={<Register />} />
-        <Route path="/aceitar-convite" element={<AcceptInvitation />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route
+          path="/aceitar-convite"
+          element={<AcceptInvitation />}
+        />
+        <Route
+          path="*"
+          element={<Navigate to="/login" replace />}
+        />
       </Routes>
     )
   }
@@ -295,7 +302,9 @@ function AppRoutes() {
   if (accessError) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
-        <p className="text-center text-red-600">{accessError}</p>
+        <p className="text-center text-red-600">
+          {accessError}
+        </p>
 
         <button
           type="button"
@@ -352,7 +361,10 @@ function AppRoutes() {
           hasStaffAccess && hasCustomerAccess ? (
             <ChooseArea />
           ) : (
-            <Navigate to={hasStaffAccess ? '/' : '/portal'} replace />
+            <Navigate
+              to={hasStaffAccess ? '/' : '/portal'}
+              replace
+            />
           )
         }
       />
@@ -408,6 +420,7 @@ function AppRoutes() {
         }
       />
 
+      {/* Detalhes internos: somente equipe */}
       <Route
         path="/chamados/:id"
         element={
@@ -472,7 +485,7 @@ function AppRoutes() {
         }
       />
 
-      {/* Detalhes do chamado do cliente em página própria */}
+      {/* Detalhes do cliente: componente independente */}
       <Route
         path="/portal/chamados/:id"
         element={

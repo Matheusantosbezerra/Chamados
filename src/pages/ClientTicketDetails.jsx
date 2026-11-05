@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
@@ -15,7 +16,6 @@ import {
   Send,
   Ticket,
   UserRound,
-  UploadCloud,
   X,
   AlertCircle,
 } from 'lucide-react'
@@ -98,7 +98,27 @@ function formatSize(bytes) {
 }
 
 function statusLabel(status) {
-  return STATUSES.find((item) => item.value === status)?.label || status
+  return (
+    STATUSES.find((item) => item.value === status)?.label ||
+    status ||
+    'Aberto'
+  )
+}
+
+function statusStyle(status) {
+  if (status === 'CLOSED' || status === 'RESOLVED') {
+    return 'bg-emerald-50 text-emerald-700'
+  }
+
+  if (status === 'WAITING_CUSTOMER') {
+    return 'bg-violet-50 text-violet-700'
+  }
+
+  if (status === 'IN_PROGRESS') {
+    return 'bg-amber-50 text-amber-700'
+  }
+
+  return 'bg-blue-50 text-blue-700'
 }
 
 function priorityLabel(priority) {
@@ -116,22 +136,6 @@ function priorityStyle(priority) {
   if (priority === 'LOW') return 'text-slate-500'
 
   return 'text-amber-600'
-}
-
-function statusStyle(status) {
-  if (status === 'CLOSED' || status === 'RESOLVED') {
-    return 'bg-emerald-50 text-emerald-700'
-  }
-
-  if (status === 'WAITING_CUSTOMER') {
-    return 'bg-violet-50 text-violet-700'
-  }
-
-  if (status === 'IN_PROGRESS') {
-    return 'bg-amber-50 text-amber-700'
-  }
-
-  return 'bg-blue-50 text-blue-700'
 }
 
 function readableError(error) {
@@ -152,17 +156,11 @@ function readableError(error) {
   return error.message || 'Não foi possível concluir a operação.'
 }
 
-function Attachment({ file, inverse = false }) {
+function Attachment({ file }) {
   const isImage = String(file.mime_type || '').startsWith('image/')
 
   return (
-    <div
-      className={`mt-2 flex items-center gap-2 rounded-lg p-2 ${
-        inverse
-          ? 'bg-blue-700/70 text-white'
-          : 'border border-slate-200 bg-slate-50 text-slate-700'
-      }`}
-    >
+    <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-slate-700">
       {isImage ? (
         <ImageIcon size={15} />
       ) : (
@@ -171,7 +169,10 @@ function Attachment({ file, inverse = false }) {
 
       <span className="min-w-0 flex-1 truncate text-xs">
         {file.file_name}
-        {file.file_size ? ` · ${formatSize(file.file_size)}` : ''}
+
+        {file.file_size
+          ? ` · ${formatSize(file.file_size)}`
+          : ''}
       </span>
 
       {file.signed_url ? (
@@ -179,18 +180,49 @@ function Attachment({ file, inverse = false }) {
           href={file.signed_url}
           target="_blank"
           rel="noreferrer"
-          className="shrink-0 text-xs font-bold underline"
+          className="shrink-0 text-xs font-bold text-blue-700 underline"
         >
           Abrir
         </a>
       ) : (
-        <span className="text-xs opacity-60">Indisponível</span>
+        <span className="text-xs opacity-60">
+          Indisponível
+        </span>
       )}
     </div>
   )
 }
 
-export default function TicketDetails() {
+function InfoCard({
+  label,
+  value,
+  detail,
+  icon,
+  valueClass = '',
+}) {
+  return (
+    <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        {label}
+      </p>
+
+      <p
+        className={`mt-2 flex items-center gap-2 break-words text-sm font-semibold text-slate-800 ${valueClass}`}
+      >
+        {icon}
+        {value}
+      </p>
+
+      {detail && (
+        <p className="mt-1 truncate text-xs text-slate-500">
+          {detail}
+        </p>
+      )}
+    </div>
+  )
+}
+
+export default function ClientTicketDetails() {
   const { id } = useParams()
 
   const [ticket, setTicket] = useState(null)
@@ -200,18 +232,17 @@ export default function TicketDetails() {
   const [messages, setMessages] = useState([])
   const [initialAttachments, setInitialAttachments] = useState([])
 
+  const [currentUser, setCurrentUser] = useState(null)
+
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [sending, setSending] = useState(false)
-  const [changingStatus, setChangingStatus] = useState(false)
 
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState([])
 
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-
-  const [currentUser, setCurrentUser] = useState(null)
 
   // =====================================================
   // CARREGAR CHAMADO E CONVERSA
@@ -229,8 +260,10 @@ export default function TicketDetails() {
     setError('')
 
     try {
-      const { data: authData, error: authError } =
-        await supabase.auth.getUser()
+      const {
+        data: authData,
+        error: authError,
+      } = await supabase.auth.getUser()
 
       if (authError) throw authError
 
@@ -240,24 +273,27 @@ export default function TicketDetails() {
 
       setCurrentUser(authData.user)
 
-      const { data: ticketData, error: ticketError } =
-        await supabase
-          .from('tickets')
-          .select(`
-            id,
-            number,
-            subject,
-            description,
-            status,
-            priority,
-            customer_id,
-            client_company_id,
-            organization_id,
-            created_at,
-            updated_at
-          `)
-          .eq('id', id)
-          .single()
+      // O acesso ao chamado é validado pelas políticas RLS.
+      const {
+        data: ticketData,
+        error: ticketError,
+      } = await supabase
+        .from('tickets')
+        .select(`
+          id,
+          number,
+          subject,
+          description,
+          status,
+          priority,
+          customer_id,
+          client_company_id,
+          organization_id,
+          created_at,
+          updated_at
+        `)
+        .eq('id', id)
+        .single()
 
       if (ticketError) throw ticketError
 
@@ -279,9 +315,6 @@ export default function TicketDetails() {
           .eq('id', ticketData.client_company_id)
           .maybeSingle(),
 
-        // Compatibilidade com a coluna sender_name.
-        // Caso ainda não exista no banco, a consulta é repetida
-        // sem essa coluna.
         supabase
           .from('ticket_messages')
           .select(`
@@ -314,10 +347,13 @@ export default function TicketDetails() {
           .order('created_at', { ascending: true }),
       ])
 
-      if (attachmentResult.error) throw attachmentResult.error
+      if (attachmentResult.error) {
+        throw attachmentResult.error
+      }
 
       let messageRows = messageResult.data || []
 
+      // Compatibilidade caso sender_name ainda não exista no banco.
       if (messageResult.error) {
         const errorText = messageResult.error.message || ''
 
@@ -351,12 +387,15 @@ export default function TicketDetails() {
         }
       }
 
+      // Gerar URLs temporárias para abrir os anexos privados.
       const attachments = await Promise.all(
         (attachmentResult.data || []).map(async (file) => {
-          const { data, error: signedError } =
-            await supabase.storage
-              .from(BUCKET)
-              .createSignedUrl(file.storage_path, 3600)
+          const {
+            data,
+            error: signedError,
+          } = await supabase.storage
+            .from(BUCKET)
+            .createSignedUrl(file.storage_path, 3600)
 
           if (signedError) {
             console.warn('Erro ao abrir anexo:', signedError)
@@ -369,17 +408,20 @@ export default function TicketDetails() {
         })
       )
 
-      const attachmentsByMessage = attachments.reduce((acc, file) => {
-        if (file.message_id) {
-          if (!acc[file.message_id]) {
-            acc[file.message_id] = []
+      const attachmentsByMessage = attachments.reduce(
+        (acc, file) => {
+          if (file.message_id) {
+            if (!acc[file.message_id]) {
+              acc[file.message_id] = []
+            }
+
+            acc[file.message_id].push(file)
           }
 
-          acc[file.message_id].push(file)
-        }
-
-        return acc
-      }, {})
+          return acc
+        },
+        {}
+      )
 
       setTicket(ticketData)
       setCustomer(customerResult.data || null)
@@ -392,11 +434,12 @@ export default function TicketDetails() {
       setMessages(
         messageRows.map((message) => ({
           ...message,
-          attachments: attachmentsByMessage[message.id] || [],
+          attachments:
+            attachmentsByMessage[message.id] || [],
         }))
       )
     } catch (err) {
-      console.error('Erro ao carregar chamado:', err)
+      console.error('Erro ao carregar chamado do cliente:', err)
       setError(readableError(err))
     } finally {
       setLoading(false)
@@ -416,7 +459,7 @@ export default function TicketDetails() {
     if (!id) return undefined
 
     const channel = supabase
-      .channel(`staff-ticket-details-${id}`)
+      .channel(`client-ticket-details-${id}`)
       .on(
         'postgres_changes',
         {
@@ -468,9 +511,9 @@ export default function TicketDetails() {
     const next = [...files]
 
     for (const file of incoming) {
-      const ext = fileExtension(file.name)
+      const extension = getExtension(file.name)
 
-      if (!MIME[ext]) {
+      if (!MIME[extension]) {
         setError(`Formato de arquivo não permitido: ${file.name}`)
         return
       }
@@ -492,7 +535,9 @@ export default function TicketDetails() {
           existing.lastModified === file.lastModified
       )
 
-      if (!duplicate) next.push(file)
+      if (!duplicate) {
+        next.push(file)
+      }
     }
 
     setFiles(next)
@@ -528,7 +573,9 @@ export default function TicketDetails() {
           file.type ||
           'application/octet-stream'
 
-        const { error: uploadError } = await supabase.storage
+        const {
+          error: uploadError,
+        } = await supabase.storage
           .from(BUCKET)
           .upload(path, file, {
             cacheControl: '3600',
@@ -553,16 +600,27 @@ export default function TicketDetails() {
         })
       }
 
-      const { error: insertError } = await supabase
+      const {
+        error: insertError,
+      } = await supabase
         .from('ticket_attachments')
         .insert(rows)
 
       if (insertError) throw insertError
     } catch (uploadError) {
       if (uploadedPaths.length) {
-        await supabase.storage
+        const {
+          error: removeError,
+        } = await supabase.storage
           .from(BUCKET)
           .remove(uploadedPaths)
+
+        if (removeError) {
+          console.error(
+            'Não foi possível remover os arquivos enviados:',
+            removeError
+          )
+        }
       }
 
       throw uploadError
@@ -570,7 +628,7 @@ export default function TicketDetails() {
   }
 
   // =====================================================
-  // ENVIAR RESPOSTA DO ATENDENTE
+  // ENVIAR RESPOSTA DO CLIENTE
   // =====================================================
 
   async function sendReply(event) {
@@ -592,45 +650,59 @@ export default function TicketDetails() {
     let messageCreated = false
 
     try {
-      const { data: authData, error: authError } =
-        await supabase.auth.getUser()
+      const {
+        data: authData,
+        error: authError,
+      } = await supabase.auth.getUser()
 
       if (authError) throw authError
+
       if (!authData.user) {
         throw new Error('Sua sessão expirou. Entre novamente.')
       }
 
-      const staffName =
+      const senderName =
         authData.user.user_metadata?.full_name ||
         authData.user.user_metadata?.name ||
         authData.user.email ||
-        'Equipe de atendimento'
+        'Cliente'
 
+      // IMPORTANTE:
+      // O cliente sempre envia como CUSTOMER.
+      // Nenhum status é alterado nesta função.
       const messagePayload = {
         ticket_id: ticket.id,
         organization_id: ticket.organization_id,
         client_company_id: ticket.client_company_id,
         sender_id: authData.user.id,
-        sender_type: 'STAFF',
-        sender_name: staffName,
+        sender_type: 'CUSTOMER',
+        sender_name: senderName,
         message: text || 'Arquivo anexado.',
       }
 
       let insertedMessage
 
-      const { data: inserted, error: insertError } =
-        await supabase
-          .from('ticket_messages')
-          .insert(messagePayload)
-          .select('id')
-          .single()
+      const {
+        data: inserted,
+        error: insertError,
+      } = await supabase
+        .from('ticket_messages')
+        .insert(messagePayload)
+        .select('id')
+        .single()
 
       if (insertError) {
+        const errorText = insertError.message || ''
+
+        // Compatibilidade caso sender_name ainda não exista.
         if (
-          insertError.message?.includes('sender_name') ||
-          insertError.message?.includes('schema cache')
+          errorText.includes('sender_name') ||
+          errorText.includes('schema cache')
         ) {
-          const { sender_name, ...fallbackPayload } = messagePayload
+          const {
+            sender_name,
+            ...fallbackPayload
+          } = messagePayload
 
           const fallback = await supabase
             .from('ticket_messages')
@@ -659,62 +731,26 @@ export default function TicketDetails() {
 
       setDraft('')
       setFiles([])
-      setNotice('Resposta enviada ao cliente.')
+
+      setNotice('Sua mensagem foi enviada ao atendimento.')
 
       await loadTicket(false)
     } catch (err) {
-      console.error('Erro ao enviar resposta:', err)
+      console.error('Erro ao enviar mensagem do cliente:', {
+        code: err?.code,
+        message: err?.message,
+        details: err?.details,
+        hint: err?.hint,
+        error: err,
+      })
 
       setError(
         messageCreated
-          ? `A mensagem foi enviada, mas ocorreu uma falha ao anexar os arquivos. ${readableError(err)}`
+          ? `Sua mensagem foi enviada, mas houve uma falha ao anexar os arquivos. ${readableError(err)}`
           : readableError(err)
       )
     } finally {
       setSending(false)
-    }
-  }
-
-  // =====================================================
-  // ALTERAR STATUS
-  // =====================================================
-
-  async function changeStatus(nextStatus) {
-    if (!ticket || nextStatus === ticket.status) return
-
-    setChangingStatus(true)
-    setError('')
-    setNotice('')
-
-    try {
-      const { data, error: updateError } = await supabase
-        .from('tickets')
-        .update({
-          status: nextStatus,
-        })
-        .eq('id', ticket.id)
-        .select(`
-          id,
-          status,
-          updated_at
-        `)
-        .single()
-
-      if (updateError) throw updateError
-
-      setTicket((current) => ({
-        ...current,
-        ...data,
-      }))
-
-      setNotice(
-        `Status alterado para ${statusLabel(nextStatus)}.`
-      )
-    } catch (err) {
-      console.error('Erro ao alterar status:', err)
-      setError(readableError(err))
-    } finally {
-      setChangingStatus(false)
     }
   }
 
@@ -727,7 +763,7 @@ export default function TicketDetails() {
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-slate-500">
           <Loader2 size={19} className="animate-spin" />
-          Carregando atendimento...
+          Carregando chamado...
         </div>
       </div>
     )
@@ -747,7 +783,7 @@ export default function TicketDetails() {
           </p>
 
           <Link
-            to="/chamados"
+            to="/portal"
             className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700"
           >
             <ArrowLeft size={16} />
@@ -759,7 +795,7 @@ export default function TicketDetails() {
   }
 
   // =====================================================
-  // INTERFACE
+  // INTERFACE DO CLIENTE
   // =====================================================
 
   return (
@@ -769,7 +805,7 @@ export default function TicketDetails() {
 
       <div className="flex items-center justify-between gap-3">
         <Link
-          to="/chamados"
+          to="/portal"
           className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-blue-700"
         >
           <ArrowLeft size={16} />
@@ -807,7 +843,6 @@ export default function TicketDetails() {
       {/* CABEÇALHO DO CHAMADO */}
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-
         <header className="flex flex-col justify-between gap-4 border-b border-slate-100 bg-slate-50/70 p-5 sm:flex-row sm:items-start sm:px-6 sm:py-5">
 
           <div className="flex min-w-0 items-start gap-3">
@@ -831,23 +866,14 @@ export default function TicketDetails() {
             </div>
           </div>
 
+          {/* O CLIENTE APENAS VISUALIZA O STATUS */}
+
           <div className="shrink-0">
-            <select
-              value={ticket.status}
-              onChange={(event) => changeStatus(event.target.value)}
-              disabled={changingStatus}
-              aria-label="Alterar status do chamado"
-              className={`w-full min-w-[165px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50`}
+            <span
+              className={`inline-flex items-center rounded-xl px-4 py-2.5 text-sm font-semibold ${statusStyle(ticket.status)}`}
             >
-              {STATUSES.map((status) => (
-                <option
-                  key={status.value}
-                  value={status.value}
-                >
-                  {status.label}
-                </option>
-              ))}
-            </select>
+              {statusLabel(ticket.status)}
+            </span>
           </div>
 
         </header>
@@ -889,7 +915,7 @@ export default function TicketDetails() {
           </h2>
 
           <p className="mt-1 text-xs text-slate-500">
-            Responda ao cliente e acompanhe todas as devolutivas.
+            Envie mensagens e acompanhe as respostas da equipe de atendimento.
           </p>
         </header>
 
@@ -926,23 +952,20 @@ export default function TicketDetails() {
             </div>
           </div>
 
+          {/* RESPOSTAS */}
+
           {messages.map((message) => {
             const isStaff = message.sender_type === 'STAFF'
 
-            const senderName = isStaff
-              ? (
-                  message.sender_name ||
-                  'Equipe de atendimento'
-                )
-              : (
-                  message.sender_name ||
-                  (
-                    message.sender_id === currentUser?.id
-                      ? customer?.name
-                      : customer?.name
-                  ) ||
-                  'Cliente'
-                )
+            const senderName =
+              message.sender_name ||
+              (
+                isStaff
+                  ? 'Equipe de atendimento'
+                  : message.sender_id === currentUser?.id
+                    ? 'Você'
+                    : 'Cliente da empresa'
+              )
 
             return (
               <div
@@ -957,9 +980,13 @@ export default function TicketDetails() {
                   }`}
                 >
 
-                  <div className={`flex flex-wrap items-center gap-2 text-xs font-bold ${
-                    isStaff ? 'text-blue-100' : 'text-slate-500'
-                  }`}>
+                  <div
+                    className={`flex flex-wrap items-center gap-2 text-xs font-bold ${
+                      isStaff
+                        ? 'text-blue-100'
+                        : 'text-slate-500'
+                    }`}
+                  >
                     {isStaff ? (
                       <Headphones size={14} />
                     ) : (
@@ -968,11 +995,13 @@ export default function TicketDetails() {
 
                     <span>{senderName}</span>
 
-                    <span className={`font-normal ${
-                      isStaff
-                        ? 'text-blue-100/80'
-                        : 'text-slate-400'
-                    }`}>
+                    <span
+                      className={`font-normal ${
+                        isStaff
+                          ? 'text-blue-100/80'
+                          : 'text-slate-400'
+                      }`}
+                    >
                       · {formatDate(message.created_at)}
                     </span>
                   </div>
@@ -985,7 +1014,6 @@ export default function TicketDetails() {
                     <Attachment
                       key={file.id}
                       file={file}
-                      inverse={isStaff}
                     />
                   ))}
 
@@ -1006,8 +1034,13 @@ export default function TicketDetails() {
 
         {ticket.status === 'CLOSED' ? (
           <div className="flex items-start gap-2 border-t border-slate-100 bg-slate-50 p-5 text-sm text-slate-600">
-            <CheckCircle2 size={17} className="shrink-0 text-emerald-600" />
-            Este chamado está fechado. Altere o status no cabeçalho para reabrir o atendimento.
+            <CheckCircle2
+              size={17}
+              className="shrink-0 text-emerald-600"
+            />
+
+            Este chamado está fechado. Não é possível enviar novas mensagens.
+            Entre em contato com a equipe caso precise reabrir o atendimento.
           </div>
         ) : (
           <form
@@ -1016,19 +1049,19 @@ export default function TicketDetails() {
           >
 
             <label
-              htmlFor="staff-reply"
+              htmlFor="client-reply"
               className="block text-sm font-semibold text-slate-800"
             >
-              Sua resposta ao cliente
+              Sua mensagem
             </label>
 
             <textarea
-              id="staff-reply"
+              id="client-reply"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               rows={5}
               maxLength={10000}
-              placeholder="Digite sua resposta..."
+              placeholder="Digite sua mensagem para o atendimento..."
               className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
             />
 
@@ -1042,9 +1075,11 @@ export default function TicketDetails() {
                     className="inline-flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
                   >
                     <Paperclip size={13} />
+
                     <span className="max-w-48 truncate">
                       {file.name}
                     </span>
+
                     <span className="text-slate-400">
                       {formatSize(file.size)}
                     </span>
@@ -1071,7 +1106,6 @@ export default function TicketDetails() {
             <div className="flex flex-wrap items-center justify-between gap-3">
 
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
-
                 <Paperclip size={15} />
 
                 Anexar arquivos
@@ -1096,7 +1130,8 @@ export default function TicketDetails() {
                 ) : (
                   <Send size={16} />
                 )}
-                Enviar resposta
+
+                Enviar mensagem
               </button>
 
             </div>
@@ -1107,31 +1142,8 @@ export default function TicketDetails() {
 
           </form>
         )}
+
       </section>
-
     </main>
-  )
-}
-
-function InfoCard({ label, value, detail, icon, valueClass = '' }) {
-  return (
-    <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3">
-
-      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        {label}
-      </p>
-
-      <p className={`mt-2 flex items-center gap-2 break-words text-sm font-semibold text-slate-800 ${valueClass}`}>
-        {icon}
-        {value}
-      </p>
-
-      {detail && (
-        <p className="mt-1 truncate text-xs text-slate-500">
-          {detail}
-        </p>
-      )}
-
-    </div>
   )
 }
