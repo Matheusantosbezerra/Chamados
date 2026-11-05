@@ -12,7 +12,7 @@ import { Building2 } from 'lucide-react'
 import { supabase } from './lib/supabase'
 
 import ResetPassword from './pages/ResetPassword'
-import TicketDetails from './pages/TicketDetails'
+import TicketDetails from './pages/ClientTicketDetails'
 import Customers from './pages/Customers'
 import Organizacoes from './pages/Organizacoes'
 import Tickets from './pages/Tickets'
